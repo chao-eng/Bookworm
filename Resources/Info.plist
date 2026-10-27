@@ -162,9 +162,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.4.0</string>
+	<string>0.1.0</string>
 	<key>CFBundleVersion</key>
-	<string>7</string>
+	<string>1</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.entertainment</string>
 	<key>LSMinimumSystemVersion</key>
@@ -178,9 +178,9 @@
 	<key>NSSupportsSuddenTermination</key>
 	<true/>
 	<key>SUFeedURL</key>
-	<string>https://raw.githubusercontent.com/moerdowo/Readpaw/main/appcast.xml</string>
+	<string>https://raw.githubusercontent.com/chao-eng/Bookworm/main/appcast.xml</string>
 	<key>SUPublicEDKey</key>
-	<string>8P15E4/GqpXPmMZ3uUaF7PXYHhiFBLN7DdeLVFtRGOA=</string>
+	<string>AzvfJ/jgIEI3ZbMseYrBK6xG2s934Z5xWv0DawdJ+As=</string>
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
 	<key>SUScheduledCheckInterval</key>

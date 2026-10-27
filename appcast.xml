@@ -1,21 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/">
   <channel>
-    <title>Readpaw</title>
-    <link>https://github.com/moerdowo/Readpaw</link>
+    <title>Bookworm</title>
+    <link>https://github.com/chao-eng/Bookworm</link>
     <description>原生 macOS 电子书与漫画阅读器。</description>
     <language>zh-CN</language>
     <item>
-      <title>Readpaw 0.4.0</title>
-      <sparkle:version>7</sparkle:version>
-      <sparkle:shortVersionString>0.4.0</sparkle:shortVersionString>
-      <pubDate>Wed, 14 May 2026 15:00:00 +0000</pubDate>
+      <title>Bookworm 0.1.0</title>
+      <sparkle:version>1</sparkle:version>
+      <sparkle:shortVersionString>0.1.0</sparkle:shortVersionString>
+      <pubDate>Tue, 27 Oct 2026 08:35:02 +0000</pubDate>
       <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-      <sparkle:releaseNotesLink>https://github.com/moerdowo/Readpaw/releases/tag/v0.4.0</sparkle:releaseNotesLink>
+      <sparkle:releaseNotesLink>https://github.com/chao-eng/Bookworm/releases/tag/v0.1.0</sparkle:releaseNotesLink>
       <enclosure
-        url="https://github.com/moerdowo/Readpaw/releases/download/v0.4.0/Readpaw-0.4.0.dmg"
-        sparkle:edSignature="laRxsS3/lxXKpb2qdOUFADG6JGv5QQMP3/dCQkv0Kn+R4hLlUkoidcPk7uwWYEBsNwYbzb/w8VMa1Pc/nhUbDA=="
-        length="5264440"
+        url="https://github.com/chao-eng/Bookworm/releases/download/v0.1.0/Bookworm-0.1.0.dmg"
+        sparkle:edSignature="fS2KPqP8/isVl+uJ1ybOJpkKlY/jO6e58NiJfhLJeaOg6sJBUSpG0c/RkXgq+J9KvdeyYN5JMdnqsB3g24VGCw=="
+        length="3204619"
         type="application/octet-stream" />
     </item>
   </channel>

@@ -4,9 +4,12 @@ import AppKit
 /// Reads EPUB books. EPUB is a zip archive of XHTML/CSS/images with an OPF
 /// manifest that defines the reading order (spine). We extract the whole
 /// archive to a temp workspace so WKWebView can resolve relative URLs.
+/// 解压后的 EPUB 目录（含 META-INF/container.xml）也直接支持。
 final class EpubReader: ContentReader {
     private let url: URL
     private let workspace: URL
+    /// 解压后的 EPUB 目录直接作为 workspace，关闭时不能删除用户的书。
+    private let ownsWorkspace: Bool
     private let rootDir: URL
     private let spineHRefs: [URL]
     private let spineTitles: [String?]
@@ -15,9 +18,20 @@ final class EpubReader: ContentReader {
 
     init(url: URL) throws {
         self.url = url
-        self.workspace = BookSandbox.newWorkspace()
 
-        try TarArchiveReader.extractAll(archive: url, to: workspace)
+        // 有些 EPUB 是解压后的目录（含 META-INF/container.xml）。
+        // 直接以目录作为根，避免再对目录执行 tar 解压。
+        var isDirectory: ObjCBool = false
+        if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
+           isDirectory.boolValue {
+            self.workspace = url
+            self.ownsWorkspace = false
+        } else {
+            let workspace = BookSandbox.newWorkspace()
+            self.workspace = workspace
+            self.ownsWorkspace = true
+            try TarArchiveReader.extractAll(archive: url, to: workspace)
+        }
 
         let containerURL = workspace.appendingPathComponent("META-INF/container.xml")
         let opfRelative = try EpubReader.readOPFPath(containerURL: containerURL)
@@ -26,7 +40,7 @@ final class EpubReader: ContentReader {
 
         let parsed = try EpubReader.parseOPF(opfURL: opfURL, rootDir: rootDir)
         guard !parsed.spineURLs.isEmpty else {
-            BookSandbox.cleanup(workspace)
+            if self.ownsWorkspace { BookSandbox.cleanup(workspace) }
             throw ArchiveError.noPages
         }
         self.spineHRefs = parsed.spineURLs
@@ -60,7 +74,7 @@ final class EpubReader: ContentReader {
     }
 
     func close() {
-        BookSandbox.cleanup(workspace)
+        if ownsWorkspace { BookSandbox.cleanup(workspace) }
     }
 
     // MARK: - Parsing

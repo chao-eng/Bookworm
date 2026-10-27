@@ -1,10 +1,17 @@
 import SwiftUI
 
 /// Popover table of contents for a text ebook. Lists every chapter the
-/// reader exposed a title for; tapping a row jumps there.
+/// reader exposed a title for, indented by heading level; tapping a row
+/// jumps there.
 struct TableOfContentsView: View {
     @ObservedObject var model: ReaderModel
-    let onSelect: (Int) -> Void
+    let onSelect: (TOCEntry) -> Void
+
+    /// 当前应高亮的行：点击过目录就用点中的那行，否则取本页的第一条。
+    private var highlightedEntryID: UUID? {
+        if let id = model.currentTOCEntryID { return id }
+        return model.tableOfContents.first { $0.pageIndex == model.currentPage }?.id
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -30,7 +37,9 @@ struct TableOfContentsView: View {
                     }
                 }
                 .onAppear {
-                    if let current = model.tableOfContents
+                    if let id = highlightedEntryID {
+                        proxy.scrollTo(id, anchor: .center)
+                    } else if let current = model.tableOfContents
                         .last(where: { $0.pageIndex <= model.currentPage }) {
                         proxy.scrollTo(current.id, anchor: .center)
                     }
@@ -42,7 +51,8 @@ struct TableOfContentsView: View {
 
     @ViewBuilder
     private func tocRow(_ entry: TOCEntry) -> some View {
-        let isCurrent = entry.pageIndex == model.currentPage
+        let isCurrent = entry.id == highlightedEntryID
+        let indent = CGFloat(min(entry.level, 4)) * 16
         HStack(spacing: 8) {
             if isCurrent {
                 Image(systemName: "arrowtriangle.right.fill")
@@ -52,18 +62,19 @@ struct TableOfContentsView: View {
                 Spacer().frame(width: 12)
             }
             Text(entry.title)
-                .font(.callout)
-                .fontWeight(isCurrent ? .semibold : .regular)
+                .font(entry.level == 0 ? .callout : .subheadline)
+                .fontWeight(isCurrent || entry.level == 0 ? .semibold : .regular)
                 .foregroundStyle(isCurrent ? Color.accentColor : .primary)
                 .lineLimit(2)
                 .multilineTextAlignment(.leading)
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 9)
+        .padding(.leading, 14 + indent)
+        .padding(.trailing, 14)
+        .padding(.vertical, entry.level == 0 ? 9 : 7)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
-        .onTapGesture { onSelect(entry.pageIndex) }
+        .onTapGesture { onSelect(entry) }
         .id(entry.id)
     }
 }

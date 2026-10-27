@@ -8,16 +8,29 @@ enum PageContent {
     case htmlString(String, baseURL: URL?)
 }
 
+/// 阅读器解析出的目录条目，支持多级层级。
+/// `pageIndex` 是条目指向的 spine 页；`level` 为缩进层级（0 = 一级标题）；
+/// `anchor` 是页内锚点（可为 nil，表示跳到该页开头）。
+struct ReaderTOCItem {
+    let title: String
+    let pageIndex: Int
+    let level: Int
+    let anchor: String?
+}
+
 protocol ContentReader: AnyObject {
     func pageCount() throws -> Int
     func pageTitle(at index: Int) -> String?
     func content(at index: Int) throws -> PageContent
     func coverImage() throws -> NSImage?
+    /// 多级目录；为 nil 时由调用方退回按 `pageTitle(at:)` 生成扁平目录。
+    func tocItems() -> [ReaderTOCItem]?
     func close()
 }
 
 extension ContentReader {
     func pageTitle(at index: Int) -> String? { nil }
+    func tocItems() -> [ReaderTOCItem]? { nil }
     func coverImage() throws -> NSImage? {
         if let content = try? content(at: 0), case .image(let img) = content {
             return img

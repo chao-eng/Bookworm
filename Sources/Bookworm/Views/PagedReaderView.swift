@@ -3,13 +3,15 @@ import AppKit
 
 struct PagedReaderView: View {
     @ObservedObject var model: ReaderModel
+    let scrollBridge: ReaderScrollBridge?
 
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .topLeading) {
                 ZoomablePageView(model: model,
                                  pageIndex: model.currentPage,
-                                 displaySize: geo.size)
+                                 displaySize: geo.size,
+                                 scrollBridge: scrollBridge)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .contentShape(Rectangle())
                     .onTapGesture { location in
@@ -45,6 +47,7 @@ struct ZoomablePageView: View {
     @ObservedObject var model: ReaderModel
     let pageIndex: Int
     let displaySize: CGSize
+    let scrollBridge: ReaderScrollBridge?
 
     @State private var image: NSImage?
     @State private var placeholder: NSImage?
@@ -59,6 +62,7 @@ struct ZoomablePageView: View {
                 ZoomScrollView(
                     image: img,
                     zoomMode: model.zoomMode,
+                    scrollBridge: scrollBridge,
                     onUserMagnify: { mag in
                         // Capture the pinch into the model so the next page
                         // (which goes through applyZoom on image swap)
@@ -129,6 +133,7 @@ struct ZoomablePageView: View {
 struct ZoomScrollView: NSViewRepresentable {
     let image: NSImage
     let zoomMode: ZoomMode
+    let scrollBridge: ReaderScrollBridge?
     let onUserMagnify: (CGFloat) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(onUserMagnify: onUserMagnify) }
@@ -161,6 +166,7 @@ struct ZoomScrollView: NSViewRepresentable {
         clipped.imageView = imageView
 
         scroll.documentView = clipped
+        scrollBridge?.scrollView = scroll
         context.coordinator.scrollView = scroll
         context.coordinator.container = clipped
         context.coordinator.currentImage = image

@@ -12,6 +12,9 @@ struct WebPageView: NSViewRepresentable {
     let lineSpacing: Double
     let zoom: CGFloat
     let onScrollToTop: () -> Void
+    let scrollBridge: ReaderScrollBridge?
+    /// 目录跳转后要滚动到的页内锚点（元素 id），nil 表示从页首开始。
+    let anchor: String?
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -24,20 +27,30 @@ struct WebPageView: NSViewRepresentable {
         web.setValue(false, forKey: "drawsBackground") // best-effort transparent background
         web.underPageBackgroundColor = .clear
         web.pageZoom = zoom
+        scrollBridge?.webView = web
         context.coordinator.lastContent = nil
+        context.coordinator.desiredAnchor = anchor
         context.coordinator.style = currentStyle
         return web
     }
 
     func updateNSView(_ web: WKWebView, context: Context) {
         web.pageZoom = zoom
+        scrollBridge?.webView = web
         context.coordinator.style = currentStyle
+        context.coordinator.desiredAnchor = anchor
         let key = contentKey()
-        if context.coordinator.lastContent != key {
+        let contentChanged = context.coordinator.lastContent != key
+        if contentChanged {
             context.coordinator.lastContent = key
+            context.coordinator.resetScrollAnchor()
             load(into: web)
         }
         applyStyle(web)
+        if !contentChanged {
+            // 同一章节内换锚点（点到别的子标题）时立即滚动。
+            context.coordinator.scrollToAnchorIfNeeded(in: web)
+        }
     }
 
     /// The full set of typography + colour inputs bundled so the
@@ -164,9 +177,55 @@ struct WebPageView: NSViewRepresentable {
         """
     }
 
+    /// 把锚点转成 `scrollIntoView` 脚本。锚点里的中文、引号都要安全嵌入。
+    static func scrollScript(for anchor: String) -> String {
+        let literal: String
+        if let data = try? JSONSerialization.data(withJSONObject: anchor,
+                                                  options: .fragmentsAllowed),
+           let json = String(data: data, encoding: .utf8) {
+            literal = json
+        } else {
+            literal = "\"\""
+        }
+        return """
+        (function() {
+            function go() {
+                var id = \(literal);
+                var el = document.getElementById(id);
+                if (!el) {
+                    var named = document.getElementsByName(id);
+                    el = named.length ? named[0] : null;
+                }
+                if (el) { el.scrollIntoView({ block: 'start' }); }
+            }
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', go);
+            } else {
+                setTimeout(go, 0);
+            }
+        })();
+        """
+    }
+
     final class Coordinator: NSObject, WKNavigationDelegate {
         var lastContent: String?
         var style: ReadingStyle = ReadingStyle(theme: .dark, font: .serif, lineSpacing: 1.6)
+        /// 当前希望滚动到的锚点。
+        var desiredAnchor: String?
+        /// 已经滚动过的锚点，避免 SwiftUI 每次刷新都重复滚动。
+        private var lastScrolledAnchor: String?
+
+        func resetScrollAnchor() {
+            lastScrolledAnchor = nil
+        }
+
+        func scrollToAnchorIfNeeded(in webView: WKWebView) {
+            guard let anchor = desiredAnchor, !anchor.isEmpty,
+                  anchor != lastScrolledAnchor else { return }
+            lastScrolledAnchor = anchor
+            webView.evaluateJavaScript(WebPageView.scrollScript(for: anchor),
+                                       completionHandler: nil)
+        }
 
         func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
                      decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
@@ -188,10 +247,12 @@ struct WebPageView: NSViewRepresentable {
         // would render with the publisher's own dark-on-dark text. Catching
         // didFinish guarantees the override lands on the real document.
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            // 先注入样式再滚动，避免样式引起重排把锚点位置带偏。
             webView.evaluateJavaScript(
-                WebPageView.overrideScript(for: style),
-                completionHandler: nil
-            )
+                WebPageView.overrideScript(for: style)
+            ) { [weak self] _, _ in
+                self?.scrollToAnchorIfNeeded(in: webView)
+            }
         }
 
         // Some EPUBs trigger same-document navigations (anchor links between

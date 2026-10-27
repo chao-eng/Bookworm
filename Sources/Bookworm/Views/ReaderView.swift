@@ -80,10 +80,13 @@ enum ZoomMode: Equatable, Hashable, Codable {
 }
 
 /// One chapter entry in a text ebook's table of contents.
+/// `level` 为缩进层级（0 = 一级标题），`anchor` 为章节内的页内锚点。
 struct TOCEntry: Identifiable, Hashable {
     let id = UUID()
     let pageIndex: Int
     let title: String
+    var level: Int = 0
+    var anchor: String? = nil
 }
 
 /// A single in-book search match: which chapter, and a text snippet
@@ -164,6 +167,11 @@ final class ReaderModel: ObservableObject {
     /// formats that don't expose chapter titles (MOBI/TXT/FB2/HTML) —
     /// the TOC button only appears when this is non-empty.
     @Published var tableOfContents: [TOCEntry] = []
+
+    /// 目录跳转后需要在当前章节内滚动到的锚点；下次切页时清空。
+    @Published var pendingAnchor: String?
+    /// 用户从目录里点选的条目，用于目录里高亮这一行。
+    @Published var currentTOCEntryID: UUID?
 
     /// Live Text fallback content. Vision's text recogniser fails outright
     /// on stylised manga fonts (verified for Japanese and Chinese — zero
@@ -290,15 +298,24 @@ final class ReaderModel: ObservableObject {
                     initialPage -= initialPage % 2
                 }
 
-                // Build the table of contents for text ebooks from the
-                // reader's chapter titles. Done here in the detached task
-                // so a long spine doesn't block the main actor.
+                // Build the table of contents for text ebooks. EPUB exposes a
+                // real multi-level TOC; other formats fall back to one flat
+                // entry per chapter title.
                 var toc: [TOCEntry] = []
                 if format.isEbook {
-                    for i in 0..<count {
-                        if let title = r.pageTitle(at: i),
-                           !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                            toc.append(TOCEntry(pageIndex: i, title: title))
+                    if let items = r.tocItems(), !items.isEmpty {
+                        toc = items.map {
+                            TOCEntry(pageIndex: $0.pageIndex,
+                                     title: $0.title,
+                                     level: $0.level,
+                                     anchor: $0.anchor)
+                        }
+                    } else {
+                        for i in 0..<count {
+                            if let title = r.pageTitle(at: i),
+                               !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                toc.append(TOCEntry(pageIndex: i, title: title))
+                            }
                         }
                     }
                 }
@@ -621,7 +638,7 @@ final class ReaderModel: ObservableObject {
         return library.thumbnailImage(for: item)
     }
 
-    func setPage(_ index: Int) {
+    func setPage(_ index: Int, anchor: String? = nil) {
         var clamped = max(0, min(pageCount - 1, index))
         // Spread mode always lands on the even page of a pair so the
         // composed image stays aligned with the [0,1],[2,3],… pairing.
@@ -629,8 +646,21 @@ final class ReaderModel: ObservableObject {
             clamped -= clamped % 2
         }
         currentPage = clamped
+        // 普通翻页会清掉目录跳转留下的锚点与高亮；带着锚点调用时保留。
+        if anchor == nil {
+            pendingAnchor = nil
+            currentTOCEntryID = nil
+        } else {
+            pendingAnchor = anchor
+        }
         Task { await prefetchAround(clamped) }
         saveSubject.send(())
+    }
+
+    /// 从目录点选条目：切到对应章节，并滚动到条目锚点。
+    func jumpToTOCEntry(_ entry: TOCEntry) {
+        setPage(entry.pageIndex, anchor: entry.anchor)
+        currentTOCEntryID = entry.id
     }
 
     func bumpTextZoom(_ delta: CGFloat) {
@@ -664,6 +694,8 @@ struct ReaderView: View {
     let itemID: ComicItem.ID
     @EnvironmentObject var library: LibraryStore
     @StateObject private var model: ReaderModelHolder = ReaderModelHolder()
+    /// 当前阅读内容里可垂直滚动的视图，供 ↑/↓ 使用。
+    @State private var scrollBridge = ReaderScrollBridge()
     @ObservedObject private var ebook = EbookSettings.shared
     @State private var jumpPageText: String = ""
     @State private var showJumpField: Bool = false
@@ -723,11 +755,11 @@ struct ReaderView: View {
                         .foregroundStyle(m.backgroundDark ? .white : .black)
                     } else if m.pageCount > 0 {
                         if m.isTextBook {
-                            TextPageView(model: m)
+                            TextPageView(model: m, scrollBridge: scrollBridge)
                         } else if m.direction == .vertical {
                             VerticalPagesView(model: m)
                         } else {
-                            PagedReaderView(model: m)
+                            PagedReaderView(model: m, scrollBridge: scrollBridge)
                         }
                     } else {
                         Text("没有可显示的页面。")
@@ -818,8 +850,8 @@ struct ReaderView: View {
                         }
                         .help("目录")
                         .popover(isPresented: $showingTOC) {
-                            TableOfContentsView(model: m) { page in
-                                m.setPage(page)
+                            TableOfContentsView(model: m) { entry in
+                                m.jumpToTOCEntry(entry)
                                 showingTOC = false
                             }
                         }
@@ -1083,9 +1115,16 @@ struct ReaderView: View {
 
     private func handleKey(event: NSEvent) -> Bool {
         guard let m = model.value else { return false }
+        // ⌘/⌃ 组合键（⌘← 行首、⌃→ 切换桌面等）交给系统处理。
+        if !event.modifierFlags.intersection([.command, .control]).isEmpty { return false }
+        // 焦点在输入框（含 SwiftUI TextField 的 field editor、搜索框、跳页
+        // 输入框以及输入法组字）时，方向键属于文本编辑，交给控件自己。
+        if let firstResponder = event.window?.firstResponder, firstResponder is NSText { return false }
         let leftKey: UInt16 = 123
         let rightKey: UInt16 = 124
         let spaceKey: UInt16 = 49
+        let upKey: UInt16 = 126
+        let downKey: UInt16 = 125
         let pageUp: UInt16 = 116
         let pageDown: UInt16 = 121
         let homeKey: UInt16 = 115
@@ -1101,6 +1140,10 @@ struct ReaderView: View {
         case spaceKey, pageDown:
             m.goNext()
             return true
+        case upKey, downKey:
+            // ↑/↓ 滚动正文（长章节、放大后的页面），不依赖焦点；没有可滚动
+            // 内容时返回 false，让事件沿响应者链继续传递。
+            return scrollBridge.scrollVertically(by: event.keyCode == upKey ? -48 : 48)
         case pageUp:
             m.goPrev()
             return true
@@ -1167,6 +1210,7 @@ struct JumpToPageView: View {
 struct TextPageView: View {
     @ObservedObject var model: ReaderModel
     @ObservedObject private var ebook = EbookSettings.shared
+    let scrollBridge: ReaderScrollBridge?
 
     var body: some View {
         Group {
@@ -1177,7 +1221,9 @@ struct TextPageView: View {
                     font: ebook.font,
                     lineSpacing: ebook.lineSpacing,
                     zoom: model.textZoom,
-                    onScrollToTop: {}
+                    onScrollToTop: {},
+                    scrollBridge: scrollBridge,
+                    anchor: model.pendingAnchor
                 )
             } else {
                 ProgressView()

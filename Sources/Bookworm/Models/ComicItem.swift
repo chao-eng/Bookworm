@@ -14,6 +14,8 @@ enum ComicFormat: String, Codable, CaseIterable {
     case fb2
     case txt
     case html
+    /// 在线书源条目；`url` 为 `online://` 标识，不指向本地文件。
+    case online
 
     static func from(url: URL) -> ComicFormat? {
         switch url.pathExtension.lowercased() {
@@ -49,12 +51,13 @@ enum ComicFormat: String, Codable, CaseIterable {
         case .fb2: return "FB2"
         case .txt: return "TXT"
         case .html: return "HTML"
+        case .online: return "在线"
         }
     }
 
     var isEbook: Bool {
         switch self {
-        case .epub, .mobi, .azw, .azw3, .fb2, .txt, .html: return true
+        case .epub, .mobi, .azw, .azw3, .fb2, .txt, .html, .online: return true
         default: return false
         }
     }
@@ -99,6 +102,19 @@ struct ComicItem: Identifiable, Codable, Hashable {
     /// the scanner to preserve them as long as the file still exists.
     var isExternal: Bool?
 
+    // MARK: - 在线书字段（A-1）
+    // 全部可选，旧 library.json 可直接解码。
+
+    var sourceID: String?
+    var bookKey: String?
+    var detailURL: String?
+    var lastReadChapter: Int?
+    var lastChapterOffset: Int?
+    /// 全书进度 0…1，派生展示值。
+    var bookPercent: Double?
+
+    var isOnline: Bool { format == .online }
+
     init(url: URL, format: ComicFormat, fileSize: Int64) {
         self.id = UUID()
         self.url = url
@@ -118,6 +134,43 @@ struct ComicItem: Identifiable, Codable, Hashable {
         self.lastTranslateTarget = nil
         self.bookmarks = nil
         self.isExternal = nil
+        self.sourceID = nil
+        self.bookKey = nil
+        self.detailURL = nil
+        self.lastReadChapter = nil
+        self.lastChapterOffset = nil
+        self.bookPercent = nil
+    }
+
+    /// 由搜索结果构造在线书条目。`id` 由 `sourceID + bookKey` 稳定推导，
+    /// 重复加入同一本书返回同一条目。
+    init(searchItem: SearchItem) {
+        self.id = OnlineIdentity.bookID(sourceID: searchItem.sourceID,
+                                        bookKey: searchItem.bookKey)
+        self.url = OnlineIdentity.identifierURL(sourceID: searchItem.sourceID,
+                                                bookKey: searchItem.bookKey)
+        self.title = searchItem.name
+        self.format = .online
+        self.fileSize = 0
+        self.dateAdded = Date()
+        self.lastOpened = nil
+        self.lastReadPage = 0
+        self.pageCount = nil
+        self.thumbnailFileName = nil
+        self.lastDirection = nil
+        self.lastZoomMode = nil
+        self.lastTextZoom = nil
+        self.lastTwoPage = nil
+        self.lastTranslateSource = nil
+        self.lastTranslateTarget = nil
+        self.bookmarks = nil
+        self.isExternal = nil
+        self.sourceID = searchItem.sourceID
+        self.bookKey = searchItem.bookKey
+        self.detailURL = searchItem.detailURL
+        self.lastReadChapter = 0
+        self.lastChapterOffset = 0
+        self.bookPercent = 0
     }
 
     // MARK: - Reading progress
@@ -126,12 +179,14 @@ struct ComicItem: Identifiable, Codable, Hashable {
     /// known yet. Based on `lastReadPage + 1` so being on the last page
     /// reads as 100 %.
     var progressFraction: Double? {
+        if isOnline { return bookPercent }
         guard let total = pageCount, total > 0 else { return nil }
         return min(1.0, Double(lastReadPage + 1) / Double(total))
     }
 
     /// True once the reader has reached the final page.
     var isFinished: Bool {
+        if isOnline { return (bookPercent ?? 0) >= 0.999 }
         guard let total = pageCount, total > 0 else { return false }
         return lastReadPage + 1 >= total
     }
@@ -139,6 +194,7 @@ struct ComicItem: Identifiable, Codable, Hashable {
     /// True when the book has been opened and advanced past the first
     /// page but isn't finished — i.e. a candidate for "Continue Reading".
     var isInProgress: Bool {
-        lastReadPage > 0 && !isFinished
+        if isOnline { return (bookPercent ?? 0) > 0 && !isFinished }
+        return lastReadPage > 0 && !isFinished
     }
 }

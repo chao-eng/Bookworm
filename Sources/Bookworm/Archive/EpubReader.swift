@@ -1,6 +1,12 @@
 import Foundation
 import AppKit
 
+/// 章节标题清洗用的正则。模式是常量，预编译一次复用。
+private enum EpubTextRegex {
+    static let whitespace = try! NSRegularExpression(pattern: "\\s+")
+    static let tag = try! NSRegularExpression(pattern: "<[^>]+>")
+}
+
 /// Reads EPUB books. EPUB is a zip archive of XHTML/CSS/images with an OPF
 /// manifest that defines the reading order (spine). We extract the whole
 /// archive to a temp workspace so WKWebView can resolve relative URLs.
@@ -392,12 +398,12 @@ final class EpubReader: ContentReader {
     }
 
     private static func normalizedText(_ text: String) -> String {
-        text.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+        EpubTextRegex.whitespace.replacingMatches(in: text, with: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private static func stripTags(_ text: String) -> String {
-        text.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+        EpubTextRegex.tag.replacingMatches(in: text, with: "")
     }
 
     private static func firstMatch(in text: String, pattern: String) -> String? {

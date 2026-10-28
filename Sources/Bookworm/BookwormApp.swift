@@ -58,6 +58,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let library = LibraryStore()
     let openBooks = OpenBooks()
 
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        FloatingPanelController.shared.install()
+    }
+
+    /// 退出前强制写盘（BR-64）。
+    func applicationWillTerminate(_ notification: Notification) {
+        ReadingSession.shared.flush()
+        FloatingPanelController.shared.persistNow()
+    }
+
     /// Files opened from Finder (double-click, "Open With"), dropped on
     /// the Dock icon, or passed on the command line. Each supported file
     /// is registered as a library item and opened in a reader window.
@@ -164,6 +174,17 @@ struct BookwormApp: App {
 
                 Divider()
 
+                Button("搜索在线书…") {
+                    NotificationCenter.default.post(name: .bookwormShowOnlineSearch, object: nil)
+                }
+                .keyboardShortcut("f", modifiers: [.command, .shift])
+
+                Button("书源管理…") {
+                    NotificationCenter.default.post(name: .bookwormShowSourceManagement, object: nil)
+                }
+
+                Divider()
+
                 // The feasible stand-in for cloud sync: an explicit
                 // backup file the user can drop into iCloud Drive /
                 // Dropbox themselves. Real iCloud sync needs an iCloud
@@ -184,6 +205,23 @@ struct BookwormApp: App {
                     Updater.shared.checkForUpdates()
                 }
                 .disabled(!Updater.shared.canCheck)
+            }
+
+            // 悬浮静默窗的菜单入口，与全局热键并存（UC-10~UC-13）。
+            CommandMenu("悬浮窗") {
+                Button("显示 / 隐藏") {
+                    FloatingPanelController.shared.toggle()
+                }
+                Divider()
+                Button("下一页") { FloatingPanelController.shared.nextPage() }
+                Button("上一页") { FloatingPanelController.shared.prevPage() }
+                Button("下一章") { ReadingSession.shared.nextChapter() }
+                Button("上一章") { ReadingSession.shared.prevChapter() }
+                Divider()
+                Button("自动翻页") { FloatingPanelController.shared.toggleAutoPage() }
+                Button("迷你模式") { FloatingPanelController.shared.toggleMini() }
+                Divider()
+                Button("设置") { FloatingSettingsWindow.shared.show() }
             }
         }
 
@@ -247,7 +285,10 @@ extension BookwormApp {
     /// File ▸ Export Library Backup… — write the whole library (items,
     /// reading progress, bookmarks, per-book prefs) to a JSON file.
     func exportLibraryBackup() {
-        guard let data = appDelegate.library.exportBackupData() else { return }
+        guard let data = appDelegate.library.exportBackupData(
+            sources: SourceRepository.shared.sources,
+            floating: FloatingPanelController.shared.state
+        ) else { return }
         let panel = NSSavePanel()
         panel.title = "导出书库备份"
         panel.allowedContentTypes = [.json]
@@ -272,6 +313,19 @@ extension BookwormApp {
               let url = panel.url,
               let data = try? Data(contentsOf: url) else { return }
         let result = appDelegate.library.importBackup(data: data)
+
+        // 书源与悬浮窗配置按合并方式恢复（UC-17）。
+        if let pkg = LibraryStore.decodeBackup(data) {
+            if let sources = pkg.sources, !sources.isEmpty,
+               let encoded = try? JSONEncoder().encode(sources),
+               let preview = SourceRepository.shared.preview(data: encoded).preview {
+                SourceRepository.shared.apply(preview, resolution: .overwrite)
+            }
+            if let floating = pkg.floating {
+                FloatingPanelController.shared.importState(floating)
+            }
+        }
+
         let alert = NSAlert()
         if result.updated == 0 && result.added == 0 {
             alert.messageText = "没有可导入的内容"
@@ -290,14 +344,22 @@ struct RootView: View {
     @EnvironmentObject var library: LibraryStore
     @EnvironmentObject var openBooks: OpenBooks
     @State private var dropTargeted: Bool = false
+    /// 未选书库文件夹时，从菜单进入在线书源仍能打开书架。
+    @State private var forceLibrary: Bool = false
 
     var body: some View {
         Group {
-            if library.rootFolder == nil {
+            if library.rootFolder == nil && library.items.isEmpty && !forceLibrary {
                 OnboardingView()
             } else {
                 LibraryView()
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .bookwormShowOnlineSearch)) { _ in
+            forceLibrary = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .bookwormShowSourceManagement)) { _ in
+            forceLibrary = true
         }
         .overlay {
             if dropTargeted {

@@ -112,6 +112,7 @@ struct BookSearchView: View {
                             .foregroundStyle(.secondary)
                     }
                     .buttonStyle(.borderless)
+                    .focusEffectDisabled()
                 }
             }
             .padding(.horizontal, 14)

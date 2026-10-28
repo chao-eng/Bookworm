@@ -20,39 +20,23 @@ struct OCRBox: Hashable {
 final class OCRService {
     static let shared = OCRService()
 
-    /// Cache OCR results per (image identity, recognition language) so
+    /// Cache OCR results per (page identity, recognition language) so
     /// flipping the translate toggle off and back on doesn't re-run Vision.
-    /// NSCache uses NSImage identity (pointer) as the key — works because
-    /// the ZoomablePageView reuses NSImage instances from the model cache.
-    private let cache = NSCache<CacheKey, NSArray>()
-
-    private final class CacheKey: NSObject {
-        let imageID: ObjectIdentifier
-        let language: String
-
-        init(image: NSImage, language: String) {
-            self.imageID = ObjectIdentifier(image)
-            self.language = language
-        }
-
-        override var hash: Int {
-            var h = Hasher()
-            h.combine(imageID)
-            h.combine(language)
-            return h.finalize()
-        }
-
-        override func isEqual(_ object: Any?) -> Bool {
-            guard let o = object as? CacheKey else { return false }
-            return o.imageID == imageID && o.language == language
-        }
-    }
+    /// The caller supplies a *stable* page key (book id + page number)
+    /// because the page image cache only keeps 6 NSImages: flipping back
+    /// to an older page usually re-decodes the image, so a pointer-based
+    /// key would miss every time — and a reused pointer could even hit
+    /// another page's result. Without a stable key we skip the cache
+    /// entirely rather than risk returning the wrong page's OCR.
+    private let cache = NSCache<NSString, NSArray>()
 
     func recognize(in image: NSImage,
-                   recognitionLanguage: String?) async -> [OCRBox] {
-        let langKey = recognitionLanguage ?? "auto"
-        let key = CacheKey(image: image, language: langKey)
-        if let cached = cache.object(forKey: key) as? [OCRBox] {
+                   recognitionLanguage: String?,
+                   pageKey: String? = nil) async -> [OCRBox] {
+        // NSString keys compare by value, so equal page keys hit across
+        // re-decoded NSImage instances.
+        let key: NSString? = pageKey.map { "\($0)#\(recognitionLanguage ?? "auto")" as NSString }
+        if let key, let cached = cache.object(forKey: key) as? [OCRBox] {
             return cached
         }
 
@@ -65,7 +49,7 @@ final class OCRService {
         }.value
 
         if visionResult.count >= 2 || !OCRService.shouldRunLiveTextFallback(for: recognitionLanguage) {
-            cache.setObject(visionResult as NSArray, forKey: key)
+            if let key { cache.setObject(visionResult as NSArray, forKey: key) }
             return visionResult
         }
 
@@ -85,7 +69,7 @@ final class OCRService {
         let merged = liveTextResult.count >= visionResult.count
             ? liveTextResult
             : visionResult
-        cache.setObject(merged as NSArray, forKey: key)
+        if let key { cache.setObject(merged as NSArray, forKey: key) }
         return merged
     }
 
@@ -134,9 +118,10 @@ final class OCRService {
         transcriptCache.removeAllObjects()
     }
 
-    /// Cache for `recognizeFullPageTranscript`. Keyed by NSImage identity
-    /// alone since Live Text is language-agnostic.
-    private let transcriptCache = NSCache<NSObject, NSString>()
+    /// Cache for `recognizeFullPageTranscript`. Keyed by the same stable
+    /// page key as `recognize(...)`; Live Text itself is language-agnostic
+    /// so the key carries no language. A nil key means no caching.
+    private let transcriptCache = NSCache<NSString, NSString>()
 
     /// Full-page transcript via VisionKit's `ImageAnalyzer` (Live Text).
     /// Reads stylised manga fonts that VNRecognizeTextRequest can't
@@ -145,11 +130,11 @@ final class OCRService {
     ///
     /// Live Text doesn't expose per-line bounding boxes, so callers
     /// can't use the result for on-image hover overlays — surface it in
-    /// a side panel instead. Cached per-NSImage so flipping translate
-    /// mode off/on doesn't re-run the model.
-    func recognizeFullPageTranscript(in image: NSImage) async -> [String] {
-        let key = image as NSObject
-        if let cached = transcriptCache.object(forKey: key) {
+    /// a side panel instead. Cached per stable page key so flipping
+    /// translate mode off/on doesn't re-run the model.
+    func recognizeFullPageTranscript(in image: NSImage, pageKey: String? = nil) async -> [String] {
+        let key = pageKey.map { $0 as NSString }
+        if let key, let cached = transcriptCache.object(forKey: key) {
             let lines = (cached as String)
                 .split(separator: "\n", omittingEmptySubsequences: true)
                 .map(String.init)
@@ -159,7 +144,7 @@ final class OCRService {
                                            context: nil,
                                            hints: nil) else { return [] }
         guard let transcript = await LiveTextOCR.shared.recognize(in: cgImage) else { return [] }
-        transcriptCache.setObject(transcript as NSString, forKey: key)
+        if let key { transcriptCache.setObject(transcript as NSString, forKey: key) }
         return transcript
             .split(separator: "\n", omittingEmptySubsequences: true)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }

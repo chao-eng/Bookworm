@@ -65,6 +65,7 @@ struct TranslationPanelView: View {
                         .imageScale(.small)
                 }
                 .buttonStyle(.borderless)
+                .focusEffectDisabled()
                 .help("全部复制（原文 — 译文）")
             }
             Button {
@@ -74,6 +75,7 @@ struct TranslationPanelView: View {
                     .imageScale(.small)
             }
             .buttonStyle(.borderless)
+            .focusEffectDisabled()
             .help("隐藏面板")
         }
         .padding(.horizontal, 14)

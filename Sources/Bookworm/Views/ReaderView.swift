@@ -98,6 +98,15 @@ struct SearchHit: Identifiable, Hashable {
     let snippet: String
 }
 
+/// 搜索用 HTML → 纯文本的正则。模式是常量，预编译一次复用，
+/// 避免每次搜索整本书时反复编译同一个 pattern。
+private enum PlainTextRegex {
+    static let script = try! NSRegularExpression(pattern: "(?s)<script.*?</script>")
+    static let style = try! NSRegularExpression(pattern: "(?s)<style.*?</style>")
+    static let tag = try! NSRegularExpression(pattern: "<[^>]+>")
+    static let whitespace = try! NSRegularExpression(pattern: "\\s+")
+}
+
 @MainActor
 final class ReaderModel: ObservableObject {
     let itemID: ComicItem.ID
@@ -170,6 +179,9 @@ final class ReaderModel: ObservableObject {
 
     /// 目录跳转后需要在当前章节内滚动到的锚点；下次切页时清空。
     @Published var pendingAnchor: String?
+    /// 跨章回退时把上一章正文滚到底部（落在最后一页），保持阅读连贯；
+    /// 下次切页时清空。
+    @Published var pendingScrollToEnd: Bool = false
     /// 用户从目录里点选的条目，用于目录里高亮这一行。
     @Published var currentTOCEntryID: UUID?
 
@@ -195,7 +207,11 @@ final class ReaderModel: ObservableObject {
     private var reader: ContentReader?
     private var prefetchTasks: [Int: Task<NSImage?, Never>] = [:]
     private var pageCache = NSCache<NSNumber, NSImage>()
+    /// 正文缓存上限：只保留最近访问的若干章，长书顺序阅读时不会无限增长。
+    private let contentCacheLimit = 12
     private var contentCache: [Int: PageContent] = [:]
+    /// 正文缓存的 LRU 顺序，越靠后越新。
+    private var contentCacheOrder: [Int] = []
     /// Low-resolution per-page thumbnails for the page-grid navigator.
     /// Separate from `pageCache` (which holds full-res decodes, limit 6)
     /// so scrolling the grid doesn't evict the pages being read.
@@ -348,6 +364,8 @@ final class ReaderModel: ObservableObject {
                     self.isTextBook = format.isEbook
                     self.tableOfContents = toc
                     self.isLoading = false
+                    // 文字书交给悬浮窗继续读同一本书（BR-57）。
+                    self.registerFloatingSession()
                 }
 
                 // 3. Warm the neighbours in the background — outside the
@@ -387,41 +405,32 @@ final class ReaderModel: ObservableObject {
     // MARK: - In-book search
 
     /// Search the whole book for `rawQuery`, returning per-match hits
-    /// with a context snippet. Chapter HTML is gathered on the main
-    /// actor (cheap — EPUB content is just a file URL) then read +
-    /// stripped + scanned on a background task.
+    /// with a context snippet. 逐章取内容、读文件、扫正文都在后台完成：
+    /// 此前先在 MainActor 上把全书页面内容摸一遍，长书会明显卡住界面。
     func search(_ rawQuery: String) async -> [SearchHit] {
         let query = rawQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard query.count >= 2, isTextBook else { return [] }
-
-        var fileSources: [(index: Int, title: String, url: URL)] = []
-        var stringSources: [(index: Int, title: String, html: String)] = []
-        for i in 0..<pageCount {
-            guard let content = contentSync(at: i) else { continue }
-            let title = chapterTitle(at: i) ?? "第 \(i + 1) 节"
-            switch content {
-            case .htmlFile(let url, _):
-                fileSources.append((i, title, url))
-            case .htmlString(let html, _):
-                stringSources.append((i, title, html))
-            case .image:
-                break
-            }
-        }
+        guard query.count >= 2, isTextBook, let reader else { return [] }
+        let count = pageCount
 
         return await Task.detached(priority: .userInitiated) {
             var hits: [SearchHit] = []
-            for src in fileSources {
-                guard let html = try? String(contentsOf: src.url, encoding: .utf8) else { continue }
+            for i in 0..<count {
+                guard let content = try? reader.content(at: i) else { continue }
+                let title = reader.pageTitle(at: i) ?? "第 \(i + 1) 节"
+                // PageContent 可能含 NSImage，跨线程只使用 URL / 纯文本。
+                let html: String
+                switch content {
+                case .htmlFile(let url, _):
+                    guard let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
+                    html = text
+                case .htmlString(let text, _):
+                    html = text
+                case .image:
+                    continue
+                }
                 hits += ReaderModel.searchHits(in: html,
-                                                chapterIndex: src.index,
-                                                chapterTitle: src.title,
-                                                query: query)
-            }
-            for src in stringSources {
-                hits += ReaderModel.searchHits(in: src.html,
-                                                chapterIndex: src.index,
-                                                chapterTitle: src.title,
+                                                chapterIndex: i,
+                                                chapterTitle: title,
                                                 query: query)
             }
             return hits.sorted { $0.chapterIndex < $1.chapterIndex }
@@ -468,12 +477,9 @@ final class ReaderModel: ObservableObject {
     /// over a whole book.
     nonisolated static func htmlToPlainText(_ html: String) -> String {
         var s = html
-        s = s.replacingOccurrences(of: "(?s)<script.*?</script>", with: " ",
-                                    options: .regularExpression)
-        s = s.replacingOccurrences(of: "(?s)<style.*?</style>", with: " ",
-                                    options: .regularExpression)
-        s = s.replacingOccurrences(of: "<[^>]+>", with: " ",
-                                    options: .regularExpression)
+        s = PlainTextRegex.script.replacingMatches(in: s, with: " ")
+        s = PlainTextRegex.style.replacingMatches(in: s, with: " ")
+        s = PlainTextRegex.tag.replacingMatches(in: s, with: " ")
         s = s.replacingOccurrences(of: "&nbsp;", with: " ")
             .replacingOccurrences(of: "&#160;", with: " ")
             .replacingOccurrences(of: "&amp;", with: "&")
@@ -486,20 +492,35 @@ final class ReaderModel: ObservableObject {
             .replacingOccurrences(of: "&ldquo;", with: "\u{201C}")
             .replacingOccurrences(of: "&rdquo;", with: "\u{201D}")
             .replacingOccurrences(of: "&mdash;", with: "—")
-        s = s.replacingOccurrences(of: "\\s+", with: " ",
-                                    options: .regularExpression)
+        s = PlainTextRegex.whitespace.replacingMatches(in: s, with: " ")
         return s.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     func contentSync(at index: Int) -> PageContent? {
-        if let cached = contentCache[index] { return cached }
+        if let cached = contentCache[index] {
+            touchContentCache(index)
+            return cached
+        }
         guard let reader, index >= 0, index < pageCount else { return nil }
         do {
             let c = try reader.content(at: index)
             contentCache[index] = c
+            touchContentCache(index)
             return c
         } catch {
             return nil
+        }
+    }
+
+    /// 把索引标为最近使用；超过上限时淘汰最久未访问的一条。
+    private func touchContentCache(_ index: Int) {
+        if let pos = contentCacheOrder.firstIndex(of: index) {
+            contentCacheOrder.remove(at: pos)
+        }
+        contentCacheOrder.append(index)
+        while contentCacheOrder.count > contentCacheLimit {
+            let oldest = contentCacheOrder.removeFirst()
+            contentCache.removeValue(forKey: oldest)
         }
     }
 
@@ -544,7 +565,8 @@ final class ReaderModel: ObservableObject {
     var pageStride: Int { (twoPageSpread && !isTextBook) ? 2 : 1 }
 
     func goNext() { setPage(currentPage + pageStride) }
-    func goPrev() { setPage(currentPage - pageStride) }
+    /// 回退：跨章时落到上一章末页（章内已滚到底部），而不是从头开始。
+    func goPrev() { setPage(currentPage - pageStride, scrollToEnd: true) }
 
     // MARK: - Bookmarks
 
@@ -638,7 +660,8 @@ final class ReaderModel: ObservableObject {
         return library.thumbnailImage(for: item)
     }
 
-    func setPage(_ index: Int, anchor: String? = nil) {
+    func setPage(_ index: Int, anchor: String? = nil, scrollToEnd: Bool = false) {
+        let previousPage = currentPage
         var clamped = max(0, min(pageCount - 1, index))
         // Spread mode always lands on the even page of a pair so the
         // composed image stays aligned with the [0,1],[2,3],… pairing.
@@ -653,8 +676,48 @@ final class ReaderModel: ObservableObject {
         } else {
             pendingAnchor = anchor
         }
+        // 只有真正换了章才需要滚到章末；停在原地时不要改动滚动位置。
+        pendingScrollToEnd = scrollToEnd && clamped != previousPage
         Task { await prefetchAround(clamped) }
         saveSubject.send(())
+        syncFloatingSession(page: clamped)
+    }
+
+    // MARK: - 悬浮窗会话
+
+    /// 文字书注册到共享阅读会话，供悬浮窗读取同一本书的正文（BR-57）。
+    /// loader 强引用底层 reader，主窗关闭后悬浮窗仍能继续读。
+    private func registerFloatingSession() {
+        guard isTextBook, pageCount > 0, let contentReader = reader else { return }
+        let bookID = itemID.uuidString
+        let count = pageCount
+        let title = library.item(withID: itemID)?.title ?? ""
+        ReadingSession.shared.open(
+            bookID: bookID,
+            title: title,
+            chapterIndex: currentPage,
+            chapterCount: count,
+            chapterTitle: contentReader.pageTitle(at: currentPage) ?? "",
+            offset: 0,
+            loader: ReadingSession.Loader(load: { index in
+                guard index >= 0, index < count else {
+                    throw RuleError.empty("章节")
+                }
+                let content = try contentReader.content(at: index)
+                return ChapterPayload(index: index,
+                                      title: contentReader.pageTitle(at: index) ?? "第 \(index + 1) 节",
+                                      text: TextExtraction.plainText(from: content),
+                                      complete: true)
+            }),
+            persist: nil
+        )
+    }
+
+    /// 主窗翻页时把章索引同步给悬浮窗。
+    private func syncFloatingSession(page: Int) {
+        let session = ReadingSession.shared
+        guard session.isActive, session.bookID == itemID.uuidString else { return }
+        session.goToChapter(page)
     }
 
     /// 从目录点选条目：切到对应章节，并滚动到条目锚点。
@@ -680,13 +743,23 @@ final class ReaderModel: ObservableObject {
     }
 
     func close() {
-        reader?.close()
-        reader = nil
+        persistProgress()
         prefetchTasks.values.forEach { $0.cancel() }
         prefetchTasks.removeAll()
         pageCache.removeAllObjects()
         contentCache.removeAll()
-        persistProgress()
+        contentCacheOrder.removeAll()
+
+        // 悬浮窗还在这本书上时保留会话与底层 reader，让另一端继续读（UC-15）。
+        let session = ReadingSession.shared
+        let floatingContinues = session.isActive
+            && session.bookID == itemID.uuidString
+            && FloatingPanelController.shared.isPanelVisible
+        if floatingContinues { return }
+
+        session.close(ifBook: itemID.uuidString)
+        reader?.close()
+        reader = nil
     }
 }
 
@@ -697,6 +770,7 @@ struct ReaderView: View {
     /// 当前阅读内容里可垂直滚动的视图，供 ↑/↓ 使用。
     @State private var scrollBridge = ReaderScrollBridge()
     @ObservedObject private var ebook = EbookSettings.shared
+    @ObservedObject private var session = ReadingSession.shared
     @State private var jumpPageText: String = ""
     @State private var showJumpField: Bool = false
     @State private var showingTranslateSettings: Bool = false
@@ -705,6 +779,8 @@ struct ReaderView: View {
     @State private var showingTOC: Bool = false
     @State private var showingSearch: Bool = false
     @State private var showingTextFormat: Bool = false
+    /// 底部进度条默认隐藏，鼠标移到底部区域时才淡入，避免遮挡正文。
+    @State private var bottomBarHovered: Bool = false
 
     private var backgroundColor: Color {
         guard let m = model.value else { return Color(red: 0.02, green: 0.04, blue: 0.10) }
@@ -730,50 +806,52 @@ struct ReaderView: View {
 
     @ViewBuilder
     private var readerBody: some View {
-        ZStack {
-            backgroundColor
-                .ignoresSafeArea()
-
-            Group {
-                if let m = model.value {
-                    if m.isLoading {
-                        ProgressView(m.loadingStatus)
-                            .controlSize(.large)
-                            .foregroundStyle(m.backgroundDark ? .white : .black)
-                    } else if let err = m.loadError {
-                        VStack(spacing: 12) {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .font(.system(size: 40))
-                                .foregroundStyle(.orange)
-                            Text("无法打开此文件")
-                                .font(.title3.bold())
-                            Text(err)
-                                .multilineTextAlignment(.center)
-                                .foregroundStyle(.secondary)
-                                .padding(.horizontal, 30)
-                        }
+        // 正文铺满整个窗口，底栏做成叠在正文最下方的浮层：默认隐藏，
+        // 鼠标移到该区域才淡入，这样既不遮挡文字，也不额外占一条高度。
+        Group {
+            if let m = model.value {
+                if m.isLoading {
+                    ProgressView(m.loadingStatus)
+                        .controlSize(.large)
                         .foregroundStyle(m.backgroundDark ? .white : .black)
-                    } else if m.pageCount > 0 {
-                        if m.isTextBook {
-                            TextPageView(model: m, scrollBridge: scrollBridge)
-                        } else if m.direction == .vertical {
-                            VerticalPagesView(model: m)
-                        } else {
-                            PagedReaderView(model: m, scrollBridge: scrollBridge)
-                        }
-                    } else {
-                        Text("没有可显示的页面。")
+                } else if let err = m.loadError {
+                    VStack(spacing: 12) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 40))
+                            .foregroundStyle(.orange)
+                        Text("无法打开此文件")
+                            .font(.title3.bold())
+                        Text(err)
+                            .multilineTextAlignment(.center)
                             .foregroundStyle(.secondary)
+                            .padding(.horizontal, 30)
                     }
+                    .foregroundStyle(m.backgroundDark ? .white : .black)
+                } else if m.pageCount > 0 {
+                    if m.isTextBook {
+                        TextPageView(model: m, scrollBridge: scrollBridge)
+                    } else if m.direction == .vertical {
+                        VerticalPagesView(model: m)
+                    } else {
+                        PagedReaderView(model: m, scrollBridge: scrollBridge)
+                    }
+                } else {
+                    Text("没有可显示的页面。")
+                        .foregroundStyle(.secondary)
                 }
             }
         }
-        .toolbar { toolbarContent }
-        .safeAreaInset(edge: .bottom) {
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .overlay(alignment: .bottom) {
             if let m = model.value, m.pageCount > 0, !m.isLoading {
                 bottomBar(model: m)
+                    .opacity(bottomBarHovered ? 1 : 0)
+                    .animation(.easeInOut(duration: 0.15), value: bottomBarHovered)
+                    .onHover { bottomBarHovered = $0 }
             }
         }
+        .background(backgroundColor.ignoresSafeArea())
+        .toolbar { toolbarContent }
         .background(KeyEventHandlingView(
             onKeyDown: { handleKey(event: $0) },
             onSwipe: { handleSwipe(deltaX: $0) }
@@ -787,6 +865,13 @@ struct ReaderView: View {
         }
         .onDisappear {
             model.value?.close()
+        }
+        .onChange(of: session.chapterIndex) { _, newValue in
+            guard let m = model.value,
+                  m.isTextBook,
+                  session.bookID == itemID.uuidString,
+                  m.currentPage != newValue else { return }
+            m.setPage(newValue)
         }
     }
 
@@ -1102,59 +1187,44 @@ struct ReaderView: View {
 
     /// Trackpad swipe-between-pages. `deltaX > 0` is a swipe toward the
     /// left — page-forward in left-to-right reading, page-back in RTL
-    /// manga — mirroring the arrow-key mapping in `handleKey`.
+    /// manga — mirroring the page-level mapping in `handleKey`.
     private func handleSwipe(deltaX: CGFloat) {
-        guard let m = model.value else { return }
+        guard let m = model.value, deltaX != 0 else { return }
         let isRTL = !m.isTextBook && m.direction == .rightToLeft
-        if deltaX > 0 {
-            isRTL ? m.goPrev() : m.goNext()
-        } else if deltaX < 0 {
-            isRTL ? m.goNext() : m.goPrev()
-        }
+        turnPage(forward: isRTL ? deltaX < 0 : deltaX > 0, model: m)
     }
 
     private func handleKey(event: NSEvent) -> Bool {
         guard let m = model.value else { return false }
-        // ⌘/⌃ 组合键（⌘← 行首、⌃→ 切换桌面等）交给系统处理。
-        if !event.modifierFlags.intersection([.command, .control]).isEmpty { return false }
-        // 焦点在输入框（含 SwiftUI TextField 的 field editor、搜索框、跳页
-        // 输入框以及输入法组字）时，方向键属于文本编辑，交给控件自己。
-        if let firstResponder = event.window?.firstResponder, firstResponder is NSText { return false }
-        let leftKey: UInt16 = 123
-        let rightKey: UInt16 = 124
-        let spaceKey: UInt16 = 49
-        let upKey: UInt16 = 126
-        let downKey: UInt16 = 125
-        let pageUp: UInt16 = 116
-        let pageDown: UInt16 = 121
-        let homeKey: UInt16 = 115
-        let endKey: UInt16 = 119
-
-        switch event.keyCode {
-        case leftKey:
-            (!m.isTextBook && m.direction == .rightToLeft) ? m.goNext() : m.goPrev()
-            return true
-        case rightKey:
-            (!m.isTextBook && m.direction == .rightToLeft) ? m.goPrev() : m.goNext()
-            return true
-        case spaceKey, pageDown:
+        let context = ReaderNavigation.Context(
+            isRightToLeft: !m.isTextBook && m.direction == .rightToLeft)
+        guard let intent = ReaderNavigation.intent(for: event, context: context) else { return false }
+        switch intent {
+        case .pageForward:
+            turnPage(forward: true, model: m)
+        case .pageBackward:
+            turnPage(forward: false, model: m)
+        case .chapterForward:
             m.goNext()
-            return true
-        case upKey, downKey:
-            // ↑/↓ 滚动正文（长章节、放大后的页面），不依赖焦点；没有可滚动
-            // 内容时返回 false，让事件沿响应者链继续传递。
-            return scrollBridge.scrollVertically(by: event.keyCode == upKey ? -48 : 48)
-        case pageUp:
+        case .chapterBackward:
             m.goPrev()
-            return true
-        case homeKey:
+        case .toStart:
             m.setPage(0)
-            return true
-        case endKey:
+        case .toEnd:
             m.setPage(m.pageCount - 1)
-            return true
-        default:
-            return false
+        }
+        return true
+    }
+
+    /// 页级前进/后退：内容可滚动时先滚一屏，到边界再跨章；整页显示时直接翻页。
+    /// 文字书走 WebView 的一屏滚动，图片书走 NSScrollView（放大后仍可一屏滚动）。
+    private func turnPage(forward: Bool, model m: ReaderModel) {
+        let handled = scrollBridge.turnScreen(forward: forward) { [weak m] in
+            guard let m else { return }
+            if forward { m.goNext() } else { m.goPrev() }
+        }
+        if !handled {
+            if forward { m.goNext() } else { m.goPrev() }
         }
     }
 }
@@ -1217,18 +1287,20 @@ struct TextPageView: View {
             if let content = model.contentSync(at: model.currentPage) {
                 WebPageView(
                     content: content,
+                    bookID: model.itemID.uuidString,
+                    pageIndex: model.currentPage,
                     theme: ebook.theme,
                     font: ebook.font,
                     lineSpacing: ebook.lineSpacing,
                     zoom: model.textZoom,
                     onScrollToTop: {},
                     scrollBridge: scrollBridge,
-                    anchor: model.pendingAnchor
+                    anchor: model.pendingAnchor,
+                    scrollToEnd: model.pendingScrollToEnd
                 )
             } else {
                 ProgressView()
             }
         }
-        .id(model.currentPage)
     }
 }

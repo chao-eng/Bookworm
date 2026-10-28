@@ -26,16 +26,21 @@ final class TxtReader: ContentReader {
     private static func paginate(html: String, softLimit: Int) -> [String] {
         if html.count <= softLimit { return [html] }
         var output: [String] = []
-        var current = ""
+        // 用数组按页收集片段、最后 joined()：原实现用 `current +=` 逐段拼接，
+        // 单页片段一多就是 O(n²) 的字符串拷贝。
+        var current: [String] = []
+        var currentCount = 0
         for paragraph in html.components(separatedBy: "</p>") {
             let withClose = paragraph + "</p>"
-            if current.count + withClose.count > softLimit, !current.isEmpty {
-                output.append(current)
-                current = ""
+            if currentCount + withClose.count > softLimit, !current.isEmpty {
+                output.append(current.joined())
+                current.removeAll(keepingCapacity: true)
+                currentCount = 0
             }
-            current += withClose
+            current.append(withClose)
+            currentCount += withClose.count
         }
-        if !current.isEmpty { output.append(current) }
+        if !current.isEmpty { output.append(current.joined()) }
         return output
     }
 

@@ -8,9 +8,9 @@ import Darwin
 /// Ebooks are intentionally not served — their assets need per-chapter file
 /// resolution the reader handles in-app.
 ///
-/// ponytail: single-threaded on the main actor for library reads AND image
-/// encoding. Fine for LAN-scale traffic; move JPEG encoding off-main if the
-/// server ever hosts more than a few concurrent readers.
+/// Library reads and routing stay on the main actor; the heavy work for a
+/// page hit (archive extraction, 2400px resize, JPEG encode) runs in
+/// `PageImageEncoder` so multi-page browsing doesn't stall the app's UI.
 @MainActor
 final class BrowseServer {
     static var shared: BrowseServer?
@@ -132,10 +132,10 @@ final class BrowseServer {
             send(status: "400 Bad Request", conn: conn, body: nil, contentType: nil)
             return
         }
-        route(head: head, conn: conn)
+        await route(head: head, conn: conn)
     }
 
-    private func route(head: String, conn: NWConnection) {
+    private func route(head: String, conn: NWConnection) async {
         let firstLine = head.split(separator: "\r\n", omittingEmptySubsequences: true)
             .first.map { String($0) } ?? head
         let parts = firstLine.split(separator: " ")
@@ -155,7 +155,7 @@ final class BrowseServer {
             renderCover(idStr: id, conn: conn); return
         }
         if let match = matchPageURL(path) {
-            renderPage(idStr: match.0, page: match.1, conn: conn); return
+            await renderPage(idStr: match.0, page: match.1, conn: conn); return
         }
         if path.hasPrefix("/book/") {
             renderBook(idStr: String(path.dropFirst("/book/".count)), conn: conn); return
@@ -218,25 +218,34 @@ final class BrowseServer {
         }
     }
 
-    private func renderPage(idStr: String, page: Int, conn: NWConnection) {
+    private func renderPage(idStr: String, page: Int, conn: NWConnection) async {
         guard let id = UUID(uuidString: idStr),
               let item = library.item(withID: id) else {
             send(status: "404 Not Found", conn: conn, body: nil, contentType: nil); return
         }
+        let reader: ContentReader
         do {
-            let reader = try getReader(for: item)
-            let content = try reader.content(at: page)
-            guard case .image(let img) = content,
-                  let jpeg = img.resized(maxDimension: 2400)
-                              .jpegData(compressionQuality: 0.86) else {
-                send(status: "415 Unsupported Media Type", conn: conn, body: nil, contentType: nil)
-                return
-            }
-            send(status: "200 OK", conn: conn, body: jpeg,
-                 contentType: "image/jpeg", cache: "public, max-age=3600")
+            // Reader 的创建 / 复用仍在 MainActor 上，内存状态只由这里改。
+            reader = try getReader(for: item)
         } catch {
             send(status: "500 Internal Server Error", conn: conn,
                  body: Data(error.localizedDescription.utf8),
+                 contentType: "text/plain; charset=utf-8")
+            return
+        }
+
+        // 解档 + 缩放 + JPEG 编码交给后台串行 actor：不阻塞主线程，
+        // 同时保证同一个 reader 不会被多个连接并发访问。
+        let outcome = await PageImageEncoder.shared.encode(reader: reader, page: page)
+        switch outcome {
+        case .jpeg(let data):
+            send(status: "200 OK", conn: conn, body: data,
+                 contentType: "image/jpeg", cache: "public, max-age=3600")
+        case .unsupported:
+            send(status: "415 Unsupported Media Type", conn: conn, body: nil, contentType: nil)
+        case .failed(let message):
+            send(status: "500 Internal Server Error", conn: conn,
+                 body: Data(message.utf8),
                  contentType: "text/plain; charset=utf-8")
         }
     }
@@ -297,6 +306,36 @@ final class BrowseServer {
             current = iface.ifa_next
         }
         return found
+    }
+}
+
+// MARK: - 图片页后台编码
+
+/// 页面解码 / 缩放 / JPEG 编码的后台执行器。
+/// 串行执行有两个目的：主线程不再被 2400px 大图编码阻塞；同一个
+/// `ContentReader`（zip / pdf 句柄）不会被多个连接并发访问。
+/// `openReaders` 等可变状态仍由 `BrowseServer`（MainActor）独占持有。
+private actor PageImageEncoder {
+    static let shared = PageImageEncoder()
+
+    enum Outcome {
+        case jpeg(Data)
+        case unsupported
+        case failed(String)
+    }
+
+    func encode(reader: ContentReader, page: Int) -> Outcome {
+        do {
+            let content = try reader.content(at: page)
+            guard case .image(let img) = content,
+                  let jpeg = img.resized(maxDimension: 2400)
+                              .jpegData(compressionQuality: 0.86) else {
+                return .unsupported
+            }
+            return .jpeg(jpeg)
+        } catch {
+            return .failed(error.localizedDescription)
+        }
     }
 }
 

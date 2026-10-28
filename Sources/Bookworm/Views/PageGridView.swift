@@ -190,6 +190,7 @@ private struct BookmarkRow: View {
                     .foregroundStyle(.secondary)
             }
             .buttonStyle(.borderless)
+            .focusEffectDisabled()
             .help("移除书签")
         }
         .padding(.horizontal, 12)

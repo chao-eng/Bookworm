@@ -11,9 +11,9 @@ EXE_NAME="${APP_NAME}"   # 包内可执行文件名，须与 Info.plist 的 CFBu
 INFO_PLIST="Resources/Info.plist"
 
 echo "Building (${CONFIG})…"
-swift build -c "${CONFIG}"
+swift build -c "${CONFIG}" --disable-sandbox
 
-BIN_PATH="$(swift build -c "${CONFIG}" --show-bin-path)"
+BIN_PATH="$(swift build -c "${CONFIG}" --disable-sandbox --show-bin-path)"
 EXE_PATH="${BIN_PATH}/${EXE_NAME}"
 
 if [[ ! -f "${EXE_PATH}" ]]; then

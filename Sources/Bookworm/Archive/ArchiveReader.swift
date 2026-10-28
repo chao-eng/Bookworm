@@ -76,6 +76,9 @@ enum ArchiveFactory {
             return try TxtReader(url: item.url)
         case .html:
             return try HtmlReader(url: item.url)
+        case .online:
+            // 在线书不走本地文件解析，由 OnlineReaderView 单独承载。
+            throw ArchiveError.unsupportedFormat
         }
     }
 }

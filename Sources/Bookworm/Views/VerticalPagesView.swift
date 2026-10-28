@@ -6,7 +6,7 @@ struct VerticalPagesView: View {
 
     var body: some View {
         ScrollViewReader { proxy in
-            ScrollView(.vertical, showsIndicators: true) {
+            ScrollView(.vertical, showsIndicators: false) {
                 LazyVStack(spacing: 0) {
                     ForEach(0..<model.pageCount, id: \.self) { idx in
                         VerticalPageRow(model: model, pageIndex: idx)

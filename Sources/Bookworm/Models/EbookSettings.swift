@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import AppKit
 
 /// Reading typeface for text-based ebooks. Maps to a CSS `font-family`
 /// stack of fonts that ship with macOS — no bundled font files.
@@ -32,6 +33,34 @@ enum EbookFont: String, CaseIterable, Identifiable, Codable {
         case .rounded:
             return "ui-rounded, \"SF Pro Rounded\", -apple-system, sans-serif"
         }
+    }
+
+    /// TextKit 字体：与上面的 CSS 字体栈对应，供在线阅读器排版与绘制共用，
+    /// 让本地/在线两种阅读窗口的字形保持一致。
+    func nsFont(size: CGFloat, weight: NSFont.Weight = .regular) -> NSFont {
+        let base = NSFont.systemFont(ofSize: size, weight: weight)
+        switch self {
+        case .system:
+            return base
+        case .sans:
+            return NSFont(name: "Helvetica Neue", size: size) ?? base
+        case .serif:
+            guard let descriptor = base.fontDescriptor.withDesign(.serif),
+                  let font = NSFont(descriptor: descriptor, size: size) else { return base }
+            return font
+        case .rounded:
+            guard let descriptor = base.fontDescriptor.withDesign(.rounded),
+                  let font = NSFont(descriptor: descriptor, size: size) else { return base }
+            return font
+        }
+    }
+
+    /// 把「行高倍数」换算成 TextKit 的额外行距，口径与本地阅读器的 CSS
+    /// `line-height` 一致（行高 = 字号 × 倍数），而不是在系统行高上再叠加。
+    func extraLineSpacing(size: CGFloat, multiplier: Double) -> CGFloat {
+        let font = nsFont(size: size)
+        let natural = font.ascender - font.descender + font.leading
+        return max(0, size * CGFloat(multiplier) - natural)
     }
 }
 
@@ -106,6 +135,26 @@ enum EbookTheme: String, CaseIterable, Identifiable, Codable {
         case .sepia: return "#9a5b16"
         case .dark:  return "#6fa8ff"
         case .black: return "#6fa8ff"
+        }
+    }
+
+    /// 正文颜色（与 `cssText` 同值），让在线阅读器与本地阅读器配色一致。
+    var textColor: Color {
+        switch self {
+        case .light: return Color(red: 28 / 255, green: 28 / 255, blue: 31 / 255)
+        case .sepia: return Color(red: 58 / 255, green: 47 / 255, blue: 30 / 255)
+        case .dark:  return Color(red: 230 / 255, green: 236 / 255, blue: 242 / 255)
+        case .black: return Color(red: 214 / 255, green: 214 / 255, blue: 216 / 255)
+        }
+    }
+
+    /// TextKit 绘制用的正文颜色。
+    var nsTextColor: NSColor {
+        switch self {
+        case .light: return NSColor(srgbRed: 28 / 255, green: 28 / 255, blue: 31 / 255, alpha: 1)
+        case .sepia: return NSColor(srgbRed: 58 / 255, green: 47 / 255, blue: 30 / 255, alpha: 1)
+        case .dark:  return NSColor(srgbRed: 230 / 255, green: 236 / 255, blue: 242 / 255, alpha: 1)
+        case .black: return NSColor(srgbRed: 214 / 255, green: 214 / 255, blue: 216 / 255, alpha: 1)
         }
     }
 }

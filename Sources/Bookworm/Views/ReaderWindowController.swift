@@ -15,10 +15,16 @@ final class ReaderWindowController: NSObject {
         }
         guard let item = library.item(withID: itemID) else { return }
 
-        let root = ReaderView(itemID: itemID)
-            .environmentObject(library)
+        let root: AnyView
+        if item.format == .online {
+            root = AnyView(OnlineReaderView(itemID: itemID)
+                .environmentObject(library))
+        } else {
+            root = AnyView(ReaderView(itemID: itemID)
+                .environmentObject(library))
+        }
 
-        let hosting = NSHostingController(rootView: AnyView(root))
+        let hosting = NSHostingController(rootView: root)
         let initialSize = ReaderWindowController.preferredContentSize(for: item, library: library)
         let window = NSWindow(
             contentRect: NSRect(origin: .zero, size: initialSize),
@@ -59,6 +65,11 @@ final class ReaderWindowController: NSObject {
 
     func bringToFront(itemID: ComicItem.ID) {
         windows[itemID]?.makeKeyAndOrderFront(nil)
+    }
+
+    /// 关闭某本书的阅读窗（从书架移除前调用）。
+    func close(itemID: ComicItem.ID) {
+        windows[itemID]?.close()
     }
 
     /// Sizes the reader window so the page area roughly matches the content's

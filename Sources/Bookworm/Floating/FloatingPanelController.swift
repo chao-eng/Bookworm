@@ -46,7 +46,18 @@ final class FloatingPanelController: NSObject, ObservableObject {
     /// 精简态按「行」翻页：每页只放得下一行，放不下的部分顺延到下一迷你页。
     private var miniPages: [TextPage] = []
     private var miniPaginatedText: String = ""
-    private static let miniFontSize: CGFloat = 11
+    /// 迷你字号按正文字号等比缩放：16pt 正文对应 11pt 迷你字号，
+    /// 这样调整字号设置时迷你条也会同步变化。
+    private static let miniFontScale: CGFloat = 11.0 / 16.0
+    var miniFontSize: CGFloat {
+        min(20, max(9, CGFloat(state.fontSize) * Self.miniFontScale))
+    }
+    /// 迷你条高度随字号增长，避免大字号被上下裁切。
+    private var miniBarHeight: CGFloat {
+        max(Self.miniSize.height, (miniFontSize + 33).rounded())
+    }
+    /// 迷你正文上一次排版采用的字号；字号变了要重排。
+    private var miniPaginatedFontSize: CGFloat = 0
     /// 迷你条中正文以外的固定占用：百分比 30 + 一段间距 6 + 左右内边距 24。
     private static let miniChromeWidth: CGFloat = 60
     /// 迷你正文上一次排版采用的宽度；宽度变了要重排，才能始终铺满整条。
@@ -227,7 +238,13 @@ final class FloatingPanelController: NSObject, ObservableObject {
         let clamped = min(28, max(12, value))
         guard clamped != state.fontSize else { return }
         state.fontSize = clamped
-        repaginateIfNeeded(force: true)
+        if state.mode == .mini, let panel, panel.isVisible {
+            // 迷你条高度随字号变化，先按新字号调整窗口再重排。
+            applyMiniFrame(panel)
+            repaginateMiniIfNeeded(force: true)
+        } else {
+            repaginateIfNeeded(force: true)
+        }
         updatePage()
         persistSoon()
     }
@@ -310,14 +327,18 @@ final class FloatingPanelController: NSObject, ObservableObject {
 
     /// 隐藏态下按翻页热键自动转显示（BR-54）；无会话只提示不自动开书（BR-51）。
     private func ensureVisibleForAction() -> Bool {
+        let session = ReadingSession.shared
+        // 先确认有可读内容，再决定是否显示面板：否则会把空面板拉起来显示
+        // 「未打开书籍」，看起来像凭空多出一个悬浮窗。
+        guard session.isActive else {
+            if isPanelVisible {
+                showNotice("先打开一本书")
+            }
+            return false
+        }
         if !isPanelVisible {
             // 沿用上次的显示模式（迷你模式也照旧）。
             show()
-        }
-        let session = ReadingSession.shared
-        guard session.isActive else {
-            showNotice("先打开一本书")
-            return false
         }
         return true
     }
@@ -413,14 +434,19 @@ final class FloatingPanelController: NSObject, ObservableObject {
             miniPages = []
             miniPaginatedText = ""
             miniPaginatedWidth = 0
+            miniPaginatedFontSize = 0
             return
         }
         let width = miniTextWidth()
-        if !force, text == miniPaginatedText, width == miniPaginatedWidth { return }
+        let fontSize = miniFontSize
+        if !force,
+           text == miniPaginatedText,
+           width == miniPaginatedWidth,
+           fontSize == miniPaginatedFontSize { return }
         let result = TextPaginator.paginate(text: text,
-                                            fontSize: Self.miniFontSize,
+                                            fontSize: fontSize,
                                             lineSpacing: 0,
-                                            size: CGSize(width: width, height: 18),
+                                            size: CGSize(width: width, height: fontSize + 7),
                                             weight: .medium)
         // 空行单独成页会让翻页出现空白，这里直接跳过纯空白页。
         let nonBlank = result.filter {
@@ -429,6 +455,7 @@ final class FloatingPanelController: NSObject, ObservableObject {
         miniPages = nonBlank.isEmpty ? result : nonBlank
         miniPaginatedText = text
         miniPaginatedWidth = width
+        miniPaginatedFontSize = fontSize
     }
 
     /// 迷你条正文可用宽度：按面板当前真实宽度减去固定占用，保证文字铺满整条。
@@ -513,7 +540,9 @@ final class FloatingPanelController: NSObject, ObservableObject {
         panel.hidesOnDeactivate = false
         panel.isOpaque = false
         panel.backgroundColor = .clear
-        panel.hasShadow = true
+        // 窗口阴影会在半透明底色边缘透出一圈暗边，看起来像边框；
+        // 普通态与迷你态都不需要，故始终关闭。
+        panel.hasShadow = false
         panel.animationBehavior = .none
         panel.isReleasedWhenClosed = false
         panel.isMovableByWindowBackground = true
@@ -532,8 +561,6 @@ final class FloatingPanelController: NSObject, ObservableObject {
         normalFrame = Self.clamped(normalFrame)
         panel.minSize = Self.minSize
         panel.maxSize = Self.maxSize
-        // 普通态保留窗口阴影，迷你态要求与底部 UI 无缝贴合，不留任何描边/暗边。
-        setPanelShadow(true, on: panel)
         panel.setFrame(normalFrame, display: true)
         state.frame = FloatingState.Rect(normalFrame)
     }
@@ -544,24 +571,16 @@ final class FloatingPanelController: NSObject, ObservableObject {
             normalFrame = Self.clamped(panel.frame)
         }
         normalFrame = Self.clamped(normalFrame)
-        // 迷你条宽度可以手动拖动：沿用上次拖出来的宽度，高度固定一行。
+        // 迷你条宽度可以手动拖动：沿用上次拖出来的宽度，高度随字号自适应。
         let miniWidth = min(Self.maxMiniWidth,
                             max(Self.minMiniWidth,
                                 CGFloat(state.miniWidth ?? Double(Self.miniSize.width))))
-        let size = CGSize(width: miniWidth, height: Self.miniSize.height)
+        let size = CGSize(width: miniWidth, height: miniBarHeight)
         let origin = CGPoint(x: normalFrame.origin.x,
                              y: normalFrame.maxY - size.height)
-        panel.minSize = CGSize(width: Self.minMiniWidth, height: Self.miniSize.height)
-        panel.maxSize = CGSize(width: Self.maxMiniWidth, height: Self.miniSize.height)
-        // 迷你条去掉窗口阴影：阴影会在半透明底色边缘透出一圈暗边，看起来像边框。
-        setPanelShadow(false, on: panel)
+        panel.minSize = CGSize(width: Self.minMiniWidth, height: miniBarHeight)
+        panel.maxSize = CGSize(width: Self.maxMiniWidth, height: miniBarHeight)
         panel.setFrame(CGRect(origin: origin, size: size), display: true)
-    }
-
-    private func setPanelShadow(_ enabled: Bool, on panel: FloatingPanel) {
-        guard panel.hasShadow != enabled else { return }
-        panel.hasShadow = enabled
-        panel.invalidateShadow()
     }
 
     /// 位置落在已移除的显示器时回退到主屏（BR-53）。
@@ -738,6 +757,7 @@ final class FloatingPanelController: NSObject, ObservableObject {
         miniPages = []
         miniPaginatedText = ""
         miniPaginatedWidth = 0
+        miniPaginatedFontSize = 0
         pageText = ""
         pageIndex = 0
         pageCount = 0
@@ -826,13 +846,6 @@ struct FloatingPanelView: View {
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay {
-            // 精简态去掉外描边，只保留背景底色（用户要求）。
-            if model.state.mode != .mini {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .strokeBorder(Color.primary.opacity(0.12), lineWidth: 1)
-            }
-        }
         .opacity(model.state.opacity)
         .onHover { hovering = $0 }
         .contextMenu { menu }
@@ -986,7 +999,7 @@ struct FloatingPanelView: View {
     private var miniBody: some View {
         HStack(spacing: 6) {
             Text(miniText)
-                .font(.system(size: 11, weight: .medium))
+                .font(.system(size: model.miniFontSize, weight: .medium))
                 .foregroundStyle(fontColor ?? Color.primary)
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)

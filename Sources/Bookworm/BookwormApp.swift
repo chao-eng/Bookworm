@@ -205,6 +205,9 @@ struct BookwormApp: App {
                     Updater.shared.checkForUpdates()
                 }
                 .disabled(!Updater.shared.canCheck)
+                Button("更新设置…") {
+                    UpdateSettingsWindow.shared.show()
+                }
             }
 
             // 悬浮静默窗的菜单入口，与全局热键并存（UC-10~UC-13）。

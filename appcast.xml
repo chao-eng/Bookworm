@@ -7,15 +7,14 @@
     <language>zh-CN</language>
     <item>
       <title>Bookworm 0.1.0</title>
-      <sparkle:version>1</sparkle:version>
+      <sparkle:version>2</sparkle:version>
       <sparkle:shortVersionString>0.1.0</sparkle:shortVersionString>
-      <pubDate>Tue, 27 Oct 2026 08:35:02 +0000</pubDate>
+      <pubDate>Wed, 28 Oct 2026 09:19:55 +0000</pubDate>
       <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
       <sparkle:releaseNotesLink>https://github.com/chao-eng/Bookworm/releases/tag/v0.1.0</sparkle:releaseNotesLink>
       <enclosure
         url="https://github.com/chao-eng/Bookworm/releases/download/v0.1.0/Bookworm-0.1.0.dmg"
-        sparkle:edSignature="fS2KPqP8/isVl+uJ1ybOJpkKlY/jO6e58NiJfhLJeaOg6sJBUSpG0c/RkXgq+J9KvdeyYN5JMdnqsB3g24VGCw=="
-        length="3204619"
+        sparkle:edSignature="4Hq6yiNxE2yZR6i0vA5G5FoAkuFf2XyXr2nkPnBWLFf387sSTWRgApUWTrOf1eUmVk7rGoGrOBpnB5Ge850RBw==" length="4163709"
         type="application/octet-stream" />
     </item>
   </channel>

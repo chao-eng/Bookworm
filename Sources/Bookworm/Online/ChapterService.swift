@@ -55,6 +55,8 @@ final class ChapterService: ObservableObject {
     private func fetchIndex(bookID: String,
                             detailURL: URL,
                             source: BookSource) async throws -> ChapterIndex {
+        let startedAt = Date()
+        Diagnostics.log("toc", "开始抓取目录：\(source.name)")
         let rule = source.menuRule
         var collected: [ExtractedChapter] = []
         var seen: Set<String> = []
@@ -138,11 +140,13 @@ final class ChapterService: ObservableObject {
             }
         } catch {
             recordTOC(sourceID: source.id, success: false, error: error.localizedDescription)
+            Diagnostics.log("toc", "目录失败：\(source.name) \(error.localizedDescription)，耗时 \(String(format: "%.1f", Date().timeIntervalSince(startedAt)))s")
             throw error
         }
 
         guard !collected.isEmpty else {
             recordTOC(sourceID: source.id, success: false, error: "目录为空")
+            Diagnostics.log("toc", "目录为空：\(source.name)，耗时 \(String(format: "%.1f", Date().timeIntervalSince(startedAt)))s")
             throw RuleError.empty("目录")
         }
         if rule.isReversed == true {
@@ -165,6 +169,7 @@ final class ChapterService: ObservableObject {
             Diagnostics.log("chapter-index", "写入失败：\(error.localizedDescription)")
         }
         recordTOC(sourceID: source.id, success: true)
+        Diagnostics.log("toc", "目录完成：\(source.name) \(chapters.count) 章，耗时 \(String(format: "%.1f", Date().timeIntervalSince(startedAt)))s")
         return index
     }
 

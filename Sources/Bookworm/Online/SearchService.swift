@@ -31,8 +31,16 @@ final class SearchService: ObservableObject {
     private var dedupeKeyCache: [String: String] = [:]
 
     private let maxConcurrent = 6
-    private let perSourceTimeout: TimeInterval = 7
     private let totalBudget: TimeInterval = 30
+    /// 单源网络超时：非隔离静态常量，供子任务在主线程之外读取。
+    private nonisolated static let perSourceTimeout: TimeInterval = 7
+
+    /// 批量健康度记录：搜索结束后一次落库，避免逐条改 `@Published sources` 触发整页重渲染。
+    private struct HealthRecordEntry {
+        var sourceID: String
+        var success: Bool
+        var message: String?
+    }
 
     var hasResults: Bool { !items.isEmpty }
 
@@ -89,47 +97,60 @@ final class SearchService: ObservableObject {
                      order: [String: Int],
                      token: Int) async {
         let deadline = Date().addingTimeInterval(totalBudget)
-        for chunk in sources.chunked(into: maxConcurrent) {
-            if Task.isCancelled || token != requestToken { return }
-            if Date() >= deadline {
-                failedSources += chunk.count
-                break
-            }
-            await withTaskGroup(of: SourceOutcome.self) { group in
-                for source in chunk {
-                    group.addTask { @MainActor in
-                        await SearchService.searchOne(source: source,
-                                                      keyword: keyword,
-                                                      sourceOrder: order[source.id] ?? 0)
-                    }
-                }
-                for await outcome in group {
-                    guard token == self.requestToken, !self.isCancelled else { return }
-                    self.completedSources += 1
-                    switch outcome {
-                    case .success(let newItems):
-                        self.merge(newItems)
-                    case .failure(let source, let message):
-                        self.failedSources += 1
-                        self.lastError = message
-                        if let matched = sources.first(where: { $0.id == source }) {
-                            self.failedSourceNames.append(matched.name)
-                        }
-                        SourceRepository.shared.record(kind: .search,
-                                                       sourceID: source,
-                                                       success: false,
-                                                       error: message)
-                    case .empty(let source):
-                        SourceRepository.shared.record(kind: .search,
-                                                       sourceID: source,
-                                                       success: true)
-                    }
+        // 搜索期间先累积健康度，结束后一次性批量落库（减少 @Published 风暴）。
+        var healthRecords: [HealthRecordEntry] = []
+        await withTaskGroup(of: SourceOutcome.self) { group in
+            var nextIndex = 0
+            var inFlight = 0
+
+            func addNext() {
+                guard nextIndex < sources.count else { return }
+                let source = sources[nextIndex]
+                let sourceOrder = order[source.id] ?? 0
+                nextIndex += 1
+                inFlight += 1
+                group.addTask {
+                    await SearchService.searchOne(source: source,
+                                                  keyword: keyword,
+                                                  sourceOrder: sourceOrder)
                 }
             }
-            if Date() >= deadline {
-                let remaining = sources.count - completedSources
-                if remaining > 0 { failedSources += remaining }
-                break
+
+            // 初始填满并发窗口。
+            while inFlight < maxConcurrent, nextIndex < sources.count { addNext() }
+
+            // 滑动窗口：每完成一个源立刻补位，慢源不再阻塞后续源（真正的「到达即插入」）。
+            while let outcome = await group.next() {
+                inFlight -= 1
+                if nextIndex < sources.count {
+                    if Date() < deadline, token == requestToken, !Task.isCancelled {
+                        addNext()
+                    } else {
+                        // 预算耗尽或已取消：未启动的源直接记失败，并终止在跑任务。
+                        failedSources += sources.count - nextIndex
+                        nextIndex = sources.count
+                        group.cancelAll()
+                    }
+                }
+                guard token == requestToken, !isCancelled else { return }
+                completedSources += 1
+                switch outcome {
+                case .success(let newItems):
+                    self.merge(newItems)
+                case .failure(let source, let message):
+                    self.failedSources += 1
+                    self.lastError = message
+                    if let matched = sources.first(where: { $0.id == source }) {
+                        self.failedSourceNames.append(matched.name)
+                    }
+                    healthRecords.append(HealthRecordEntry(sourceID: source,
+                                                           success: false,
+                                                           message: message))
+                case .empty(let source):
+                    healthRecords.append(HealthRecordEntry(sourceID: source,
+                                                           success: true,
+                                                           message: nil))
+                }
             }
         }
         guard token == requestToken else { return }
@@ -137,6 +158,10 @@ final class SearchService: ObservableObject {
         if completedSources < totalSources {
             failedSources = max(failedSources, totalSources - completedSources)
         }
+        // 健康度批量落库：一次数组替换、一次发布、一次防抖写盘。
+        SourceRepository.shared.recordBatch(healthRecords.map {
+            SourceRepository.HealthEntry(sourceID: $0.sourceID, success: $0.success, message: $0.message)
+        })
     }
 
     private enum SourceOutcome {
@@ -145,11 +170,12 @@ final class SearchService: ObservableObject {
         case failure(String, String)
     }
 
-    private static func searchOne(source: BookSource,
-                                  keyword: String,
-                                  sourceOrder: Int) async -> SourceOutcome {
+    /// 单源搜索：网络 + 规则解析整体不占用主线程，仅结果合并回主线程。
+    private nonisolated static func searchOne(source: BookSource,
+                                              keyword: String,
+                                              sourceOrder: Int) async -> SourceOutcome {
         do {
-            let html = try await withTimeout(seconds: 7) {
+            let html = try await withTimeout(seconds: perSourceTimeout) {
                 try await NetworkClient.shared.search(source: source, keyword: keyword)
             }
             let base = URL(string: source.homeUrl)
@@ -180,10 +206,10 @@ final class SearchService: ObservableObject {
     }
 
     /// 单源 7s 上限；超时中止该源但不阻塞其他源。
-    private static func withTimeout<T>(seconds: TimeInterval,
-                                       operation: @escaping @MainActor () async throws -> T) async throws -> T {
+    private nonisolated static func withTimeout<T>(seconds: TimeInterval,
+                                                   operation: @escaping () async throws -> T) async throws -> T {
         try await withThrowingTaskGroup(of: T.self) { group in
-            group.addTask { @MainActor in
+            group.addTask {
                 try await operation()
             }
             group.addTask {
@@ -275,7 +301,7 @@ final class SearchService: ObservableObject {
         return lhs.sourceOrder < rhs.sourceOrder
     }
 
-    private static func matchLevel(keyword: String, name: String) -> MatchLevel {
+    private nonisolated static func matchLevel(keyword: String, name: String) -> MatchLevel {
         let k = normalize(keyword)
         let n = normalize(name)
         if n == k { return .exact }
@@ -283,7 +309,7 @@ final class SearchService: ObservableObject {
         return .other
     }
 
-    private static func normalize(_ text: String) -> String {
+    private nonisolated static func normalize(_ text: String) -> String {
         let folded = text.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive],
                                   locale: Locale(identifier: "zh_CN"))
         let kept = folded.unicodeScalars.filter {
@@ -292,18 +318,9 @@ final class SearchService: ObservableObject {
         return String(String.UnicodeScalarView(kept))
     }
 
-    private static func isCJK(_ scalar: Unicode.Scalar) -> Bool {
+    private nonisolated static func isCJK(_ scalar: Unicode.Scalar) -> Bool {
         (0x4E00...0x9FFF).contains(scalar.value)
             || (0x3400...0x4DBF).contains(scalar.value)
             || (0x3040...0x30FF).contains(scalar.value)
-    }
-}
-
-private extension Array {
-    func chunked(into size: Int) -> [[Element]] {
-        guard size > 0 else { return [self] }
-        return stride(from: 0, to: count, by: size).map {
-            Array(self[$0..<Swift.min($0 + size, count)])
-        }
     }
 }

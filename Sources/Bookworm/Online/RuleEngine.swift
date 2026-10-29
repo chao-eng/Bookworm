@@ -153,7 +153,7 @@ struct ExtractedContent {
 enum RuleEngine {
     // MARK: 搜索
 
-    static func search(html: String, baseURL: URL?, source: BookSource) async throws -> ExtractedSearch {
+    nonisolated static func search(html: String, baseURL: URL?, source: BookSource) async throws -> ExtractedSearch {
         if source.isJSON, source.searchRule.listPath.contains("$$") {
             return try searchJSON(html: html, baseURL: baseURL, source: source)
         }
@@ -161,7 +161,7 @@ enum RuleEngine {
         return try await searchHTML(html: html, baseURL: baseURL, source: source)
     }
 
-    private static func searchJSON(html: String, baseURL: URL?, source: BookSource) throws -> ExtractedSearch {
+    private nonisolated static func searchJSON(html: String, baseURL: URL?, source: BookSource) throws -> ExtractedSearch {
         let root = try parseJSON(html)
         let rule = source.searchRule
         var nodes = JSONPathResolver.resolveList(rule.listPath, in: root)
@@ -207,7 +207,7 @@ enum RuleEngine {
         return ExtractedSearch(records: records, skipped: skipped)
     }
 
-    private static func searchHTML(html: String, baseURL: URL?, source: BookSource) async throws -> ExtractedSearch {
+    private nonisolated static func searchHTML(html: String, baseURL: URL?, source: BookSource) async throws -> ExtractedSearch {
         let rule = source.searchRule
         var rules: [String: Any] = [
             "list": rule.listPath,
@@ -305,7 +305,7 @@ enum RuleEngine {
 
     /// 老版书源的选择器常在中间层级使用 `:eq/:gt/:lt`，这里按层级递归截取，
     /// 使 `.listmain dd:gt(11) a` 这类写法也能命中。
-    private static let selectorJS: String = """
+    private nonisolated static let selectorJS: String = """
     function qsa(root, sel){
       if(!sel) return [];
       sel = String(sel).trim();
@@ -409,7 +409,7 @@ enum RuleEngine {
           return JSON.stringify(out);
         })(\(jsonLiteral(rules)))
         """
-        let raw = try await evaluate(html: html, baseURL: baseURL, script: script)
+        let raw = try await evaluate(html: html, baseURL: baseURL, script: script, interactive: true)
         let array = (raw as? String).flatMap { $0.data(using: .utf8) }
             .flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [[String: Any]] ?? []
 
@@ -476,7 +476,7 @@ enum RuleEngine {
           return '';
         })(\(jsonLiteral(["selector": selector, "text": text ?? ""])))
         """
-        let raw = try await evaluate(html: html, baseURL: baseURL, script: script)
+        let raw = try await evaluate(html: html, baseURL: baseURL, script: script, interactive: true)
         guard let href = raw as? String, !href.isEmpty,
               let url = URL(string: href, relativeTo: baseURL)?.absoluteURL else {
             return nil
@@ -529,7 +529,7 @@ enum RuleEngine {
           return JSON.stringify({title: title, content: text});
         })(\(jsonLiteral(rules)))
         """
-        let raw = try await evaluate(html: html, baseURL: baseURL, script: script)
+        let raw = try await evaluate(html: html, baseURL: baseURL, script: script, interactive: true)
         let dict = (raw as? String).flatMap { $0.data(using: .utf8) }
             .flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any] ?? [:]
         var text = (dict["content"] as? String ?? "")
@@ -552,7 +552,7 @@ enum RuleEngine {
           return n.getAttribute('href') || '';
         })(\(jsonLiteral(path)))
         """
-        let raw = try await evaluate(html: html, baseURL: baseURL, script: script)
+        let raw = try await evaluate(html: html, baseURL: baseURL, script: script, interactive: true)
         guard let href = raw as? String, !href.isEmpty,
               let url = URL(string: href, relativeTo: baseURL)?.absoluteURL else {
             return nil
@@ -595,7 +595,7 @@ enum RuleEngine {
 
     // MARK: 工具
 
-    private static func parseJSON(_ html: String) throws -> Any {
+    private nonisolated static func parseJSON(_ html: String) throws -> Any {
         // `},]` → `}]` 修复（BR-20）。
         let repaired = html.replacingOccurrences(of: "},]", with: "}]")
         guard let data = repaired.data(using: .utf8),
@@ -605,7 +605,7 @@ enum RuleEngine {
         return root
     }
 
-    private static func nonEmpty(_ string: String?) -> String? {
+    private nonisolated static func nonEmpty(_ string: String?) -> String? {
         guard let string else { return nil }
         let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
@@ -659,7 +659,7 @@ enum RuleEngine {
         return output.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private static func jsonLiteral(_ object: Any) -> String {
+    private nonisolated static func jsonLiteral(_ object: Any) -> String {
         guard let data = try? JSONSerialization.data(withJSONObject: object),
               let text = String(data: data, encoding: .utf8) else {
             return "{}"
@@ -667,12 +667,86 @@ enum RuleEngine {
         return text
     }
 
-    private static func evaluate(html: String, baseURL: URL?, script: String) async throws -> Any? {
-        try await RuleWebViewPool.shared.evaluate(html: html, baseURL: baseURL, script: script)
+    /// - Parameter interactive: 用户主动操作触发的解析传 true，WebView 池内优先排队。
+    private nonisolated static func evaluate(html: String,
+                                             baseURL: URL?,
+                                             script: String,
+                                             interactive: Bool = false) async throws -> Any? {
+        try await RuleWebViewPool.shared.evaluate(html: html,
+                                                  baseURL: baseURL,
+                                                  script: script,
+                                                  interactive: interactive)
     }
 }
 
 // MARK: - 离屏 WebView 池
+
+/// 排队注册表：`onCancel` 回调可能在任意线程触发，因此独立加锁、不依赖主线程。
+/// 双队列：交互请求（阅读 / 加书架触发的目录、正文解析）优先于后台搜索解析，
+/// 避免用户点击被进行中的多源搜索排到队尾造成「卡住」。
+private final class WebViewWaiterRegistry: @unchecked Sendable {
+    private struct Waiter {
+        let id: UUID
+        let continuation: CheckedContinuation<WKWebView?, Never>
+    }
+
+    private var interactive: [Waiter] = []
+    private var normal: [Waiter] = []
+    private let lock = NSLock()
+
+    /// 是否有人排队。
+    var isEmpty: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return interactive.isEmpty && normal.isEmpty
+    }
+
+    /// 追加排队者；`interactive` 为 true 时插到高优先级队列。
+    func enqueue(id: UUID,
+                 interactive: Bool,
+                 continuation: CheckedContinuation<WKWebView?, Never>) {
+        let waiter = Waiter(id: id, continuation: continuation)
+        lock.lock()
+        if interactive {
+            self.interactive.append(waiter)
+        } else {
+            normal.append(waiter)
+        }
+        lock.unlock()
+    }
+
+    /// 唤醒队首（交互队列优先，FIFO）。返回 false 表示无人排队。
+    @discardableResult
+    func resumeFirst(with webView: WKWebView) -> Bool {
+        lock.lock()
+        guard let first = interactive.first ?? normal.first else {
+            lock.unlock()
+            return false
+        }
+        if !interactive.isEmpty { interactive.removeFirst() } else { normal.removeFirst() }
+        lock.unlock()
+        first.continuation.resume(returning: webView)
+        return true
+    }
+
+    /// 取消指定排队者（若仍在队中）。
+    func cancel(id: UUID) {
+        lock.lock()
+        if let idx = interactive.firstIndex(where: { $0.id == id }) {
+            let continuation = interactive.remove(at: idx).continuation
+            lock.unlock()
+            continuation.resume(returning: nil)
+            return
+        }
+        if let idx = normal.firstIndex(where: { $0.id == id }) {
+            let continuation = normal.remove(at: idx).continuation
+            lock.unlock()
+            continuation.resume(returning: nil)
+            return
+        }
+        lock.unlock()
+    }
+}
 
 /// 3 个离屏 `WKWebView`，禁网、禁本地存储、3s 超时（BR-44）。
 @MainActor
@@ -680,7 +754,7 @@ final class RuleWebViewPool {
     static let shared = RuleWebViewPool()
 
     private var idle: [WKWebView] = []
-    private var waiters: [CheckedContinuation<WKWebView, Never>] = []
+    private let registry = WebViewWaiterRegistry()
     private var created = 0
     private let maxCount = 3
     private var blockRuleList: WKContentRuleList?
@@ -688,12 +762,18 @@ final class RuleWebViewPool {
     private var blockListCompiling = false
     private var blockListWaiters: [CheckedContinuation<Void, Never>] = []
 
-    func evaluate(html: String, baseURL: URL?, script: String) async throws -> Any? {
+    /// - Parameter interactive: 用户主动操作（阅读 / 加书架）触发的解析传 true，
+    ///   池满时插到高优先级队列，避免被进行中的搜索解析排到队尾。
+    func evaluate(html: String, baseURL: URL?, script: String, interactive: Bool = false) async throws -> Any? {
         await prepareBlockList()
-        let webView = await borrow()
+        guard let webView = await borrow(interactive: interactive) else { throw CancellationError() }
         do {
             try await load(html: html, baseURL: baseURL, in: webView)
-            return try await run(script: script, in: webView)
+            let result = try await run(script: script, in: webView)
+            // 成功路径必须归还实例：池只有 3 个，漏一个少一个，
+            // 漏光后所有后续解析（含目录抓取）会在 borrow() 里永久挂死。
+            release(webView)
+            return result
         } catch {
             // 超时说明这个 webview 可能已卡死（WebKit 不再回调），
             // 直接丢弃并从池里补一个新的，绝不能把它还回池里。
@@ -708,22 +788,35 @@ final class RuleWebViewPool {
 
     // MARK: 池
 
-    private func borrow() async -> WKWebView {
+    /// 借出一个 WebView；任务被取消时立即放弃排队（返回 nil），
+    /// 避免「停止搜索 / 重新搜索」后新任务被旧僵尸任务卡住。
+    private func borrow(interactive: Bool) async -> WKWebView? {
         if let webView = idle.popLast() { return webView }
         if created < maxCount {
             created += 1
             return makeWebView()
         }
-        return await withCheckedContinuation { continuation in
-            waiters.append(continuation)
+        let id = UUID()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                // 注册前再试一次 idle：进入 continuation 前可能有实例被归还。
+                if let webView = idle.popLast() {
+                    continuation.resume(returning: webView)
+                    return
+                }
+                registry.enqueue(id: id, interactive: interactive, continuation: continuation)
+                // 注册后复查取消状态：若注册前已被取消（onCancel 扑空），直接放弃排队。
+                if Task.isCancelled {
+                    registry.cancel(id: id)
+                }
+            }
+        } onCancel: {
+            registry.cancel(id: id)
         }
     }
 
     private func release(_ webView: WKWebView) {
-        if let waiter = waiters.first {
-            waiters.removeFirst()
-            waiter.resume(returning: webView)
-        } else {
+        if !registry.resumeFirst(with: webView) {
             idle.append(webView)
         }
     }
@@ -734,10 +827,13 @@ final class RuleWebViewPool {
         webView.stopLoading()
         webView.navigationDelegate = nil
         if created > 0 { created -= 1 }
-        if let waiter = waiters.first {
-            waiters.removeFirst()
+        if !registry.isEmpty {
             created += 1
-            waiter.resume(returning: makeWebView())
+            let fresh = makeWebView()
+            if !registry.resumeFirst(with: fresh) {
+                // 竞态：排队者刚好在窗口内被取消。新实例放入 idle，不浪费。
+                idle.append(fresh)
+            }
         }
     }
 

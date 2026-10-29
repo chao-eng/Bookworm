@@ -251,14 +251,7 @@ struct OnlineSearchView: View {
     private func cover(for urlString: String?, size: CGSize) -> some View {
         Group {
             if let urlString, let url = URL(string: urlString) {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image.resizable().aspectRatio(contentMode: .fill)
-                    default:
-                        Rectangle().fill(Color.gray.opacity(0.18))
-                    }
-                }
+                CoverImage(url: url)
             } else {
                 ZStack {
                     Rectangle().fill(Color.gray.opacity(0.18))
@@ -328,6 +321,8 @@ struct OnlineSearchView: View {
 
     private func add(_ item: SearchItem, openAfter: Bool) {
         addError = nil
+        // 用户已做出选择：立即停止搜索，把 WebView 池与网络让位给目录抓取（已展示结果仍可用）。
+        search.cancel()
         Task {
             do {
                 let comic = try await OnlineShelfService.shared.addToShelf(item, library: library)
@@ -338,6 +333,44 @@ struct OnlineSearchView: View {
             } catch {
                 addError = error.localizedDescription
             }
+        }
+    }
+}
+
+// MARK: - 封面图缓存
+
+/// 封面内存缓存：结果列表频繁重排 / 滚动时避免重复下载与解码。
+enum CoverImageLoader {
+    private static let cache = NSCache<NSURL, NSImage>()
+
+    static func image(for url: URL) async -> NSImage? {
+        if let hit = cache.object(forKey: url as NSURL) { return hit }
+        guard let (data, _) = try? await URLSession.shared.data(from: url),
+              let image = NSImage(data: data) else {
+            return nil
+        }
+        cache.setObject(image, forKey: url as NSURL)
+        return image
+    }
+}
+
+/// 带缓存的封面视图：`.task(id:)` 保证 URL 变化或视图消失时取消未完成的下载。
+private struct CoverImage: View {
+    let url: URL?
+    @State private var image: NSImage?
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
+            } else {
+                Rectangle().fill(Color.gray.opacity(0.18))
+            }
+        }
+        .task(id: url) {
+            image = nil
+            guard let url else { return }
+            image = await CoverImageLoader.image(for: url)
         }
     }
 }

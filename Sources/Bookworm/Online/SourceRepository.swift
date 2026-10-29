@@ -19,6 +19,9 @@ final class SourceRepository: ObservableObject {
         var sources: [BookSource]
     }
 
+    /// 书源落盘串行队列：保证「异步防抖写」与「同步写」严格按快照先后落盘。
+    private let writeQueue = DispatchQueue(label: "bookworm.sources.write", qos: .utility)
+
     init() {
         load()
         // 退出前把防抖中的改动落盘，避免最后一次健康度记录丢失。
@@ -146,6 +149,30 @@ final class SourceRepository: ObservableObject {
         var health = sources[idx].health ?? SourceHealth(sourceID: sourceID)
         health.record(kind, success: success, error: error.map { Diagnostics.redact($0) })
         sources[idx].health = health
+        scheduleSave()
+    }
+
+    /// 批量健康度条目（搜索结束一次性落库用）。
+    struct HealthEntry {
+        var sourceID: String
+        var success: Bool
+        var message: String?
+    }
+
+    /// 批量记录搜索健康度：只做一次数组替换、一次 `@Published` 发布、一次防抖写盘，
+    /// 避免逐条 record 触发的整页重渲染风暴。
+    func recordBatch(_ entries: [HealthEntry]) {
+        guard !entries.isEmpty else { return }
+        var updated = sources
+        for entry in entries {
+            guard let idx = updated.firstIndex(where: { $0.id == entry.sourceID }) else { continue }
+            var health = updated[idx].health ?? SourceHealth(sourceID: entry.sourceID)
+            health.record(.search,
+                          success: entry.success,
+                          error: entry.message.map { Diagnostics.redact($0) })
+            updated[idx].health = health
+        }
+        sources = updated
         scheduleSave()
     }
 
@@ -614,7 +641,7 @@ final class SourceRepository: ObservableObject {
         save()
     }
 
-    /// 1s 防抖：同一批健康度记录只写一次盘。
+    /// 1s 防抖：同一批健康度记录只写一次盘。编码与 IO 在串行队列上执行，不占用主线程。
     private func scheduleSave() {
         needsSave = true
         guard saveTask == nil else { return }
@@ -623,7 +650,16 @@ final class SourceRepository: ObservableObject {
             guard !Task.isCancelled, let self else { return }
             self.saveTask = nil
             guard self.needsSave else { return }
-            self.save()
+            self.needsSave = false
+            // 主线程只取快照，写盘交给串行队列。
+            let file = Persisted(schemaVersion: 1, sources: self.sources)
+            self.writeQueue.async {
+                do {
+                    try AppPaths.atomicWriteJSON(file, to: AppPaths.sourcesFile)
+                } catch {
+                    Diagnostics.log("sources", "写入失败：\(error.localizedDescription)")
+                }
+            }
         }
     }
 
@@ -632,10 +668,13 @@ final class SourceRepository: ObservableObject {
         saveTask = nil
         needsSave = false
         let file = Persisted(schemaVersion: 1, sources: sources)
-        do {
-            try AppPaths.atomicWriteJSON(file, to: AppPaths.sourcesFile)
-        } catch {
-            Diagnostics.log("sources", "写入失败：\(error.localizedDescription)")
+        // 同步写也走同一串行队列：与异步写严格按快照先后落盘，避免旧快照覆盖新数据。
+        writeQueue.sync {
+            do {
+                try AppPaths.atomicWriteJSON(file, to: AppPaths.sourcesFile)
+            } catch {
+                Diagnostics.log("sources", "写入失败：\(error.localizedDescription)")
+            }
         }
     }
 }

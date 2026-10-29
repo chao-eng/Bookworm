@@ -142,11 +142,11 @@ struct BookwormApp: App {
         .defaultSize(width: 980, height: 860)
         .commands {
             CommandGroup(replacing: .newItem) {
-                Button("打开文件夹…") {
+                Button("打开文件夹") {
                     appDelegate.library.promptForFolder()
                 }
                 .keyboardShortcut("o", modifiers: [.command])
-                Button("打开文件…") {
+                Button("打开文件") {
                     openFilePanel()
                 }
                 .keyboardShortcut("o", modifiers: [.command, .shift])
@@ -177,12 +177,12 @@ struct BookwormApp: App {
 
                 Divider()
 
-                Button("搜索在线书…") {
+                Button("在线搜书") {
                     NotificationCenter.default.post(name: .bookwormShowOnlineSearch, object: nil)
                 }
                 .keyboardShortcut("f", modifiers: [.command, .shift])
 
-                Button("书源管理…") {
+                Button("书源管理") {
                     NotificationCenter.default.post(name: .bookwormShowSourceManagement, object: nil)
                 }
 
@@ -193,10 +193,10 @@ struct BookwormApp: App {
                 // Dropbox themselves. Real iCloud sync needs an iCloud
                 // container entitlement, which the ad-hoc-signed
                 // SwiftPM build can't carry.
-                Button("导出书库备份…") {
+                Button("导出书库备份") {
                     exportLibraryBackup()
                 }
-                Button("导入书库备份…") {
+                Button("导入书库备份") {
                     importLibraryBackup()
                 }
             }
@@ -204,11 +204,11 @@ struct BookwormApp: App {
             // Sparkle 自动更新，位于应用菜单（Bookworm ▸）下
             // like every other Mac app that ships Sparkle.
             CommandGroup(after: .appInfo) {
-                Button("检查更新…") {
+                Button("检查更新") {
                     Updater.shared.checkForUpdates()
                 }
                 .disabled(!Updater.shared.canCheck)
-                Button("更新设置…") {
+                Button("更新设置") {
                     UpdateSettingsWindow.shared.show()
                 }
             }

@@ -199,7 +199,7 @@ Sources/Bookworm/
 ├── SmokeTest.swift             # --smoke-test 命令行测试工具
 ├── Updater.swift               # Sparkle 自动更新封装
 ├── Resources/
-│   └── Color_orb.usdz          # 引导页 3D 模型
+│   └── onboarding_book.gif     # 引导页手绘翻页书动画（透明 GIF）
 ├── Models/
 │   ├── ComicItem.swift         # 书籍元数据 + 按书的阅读偏好
 │   ├── LibraryStore.swift      # 扫描、持久化、缩略图
@@ -248,7 +248,7 @@ Sources/Bookworm/
 │   └── BrowseServer.swift      # 局域网浏览图片书
 ├── Views/
 │   ├── OnboardingView.swift    # 欢迎页 + 胶囊形按钮
-│   ├── USDZView.swift          # SceneKit USDZ 加载器，自动旋转 + 拖拽
+│   ├── PaperBookHero.swift     # 引导页手绘翻页书动画
 │   ├── LibraryView.swift       # 封面网格、搜索、排序
 │   ├── ReaderView.swift        # 阅读器外壳 + 工具栏 + 分发
 │   ├── PagedReaderView.swift   # 基于 NSScrollView 的图片阅读器

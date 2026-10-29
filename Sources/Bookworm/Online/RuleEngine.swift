@@ -691,9 +691,19 @@ final class RuleWebViewPool {
     func evaluate(html: String, baseURL: URL?, script: String) async throws -> Any? {
         await prepareBlockList()
         let webView = await borrow()
-        defer { release(webView) }
-        try await load(html: html, baseURL: baseURL, in: webView)
-        return try await run(script: script, in: webView)
+        do {
+            try await load(html: html, baseURL: baseURL, in: webView)
+            return try await run(script: script, in: webView)
+        } catch {
+            // 超时说明这个 webview 可能已卡死（WebKit 不再回调），
+            // 直接丢弃并从池里补一个新的，绝不能把它还回池里。
+            if RuleWebViewPool.isTimeout(error) {
+                discard(webView)
+            } else {
+                release(webView)
+            }
+            throw error
+        }
     }
 
     // MARK: 池
@@ -716,6 +726,24 @@ final class RuleWebViewPool {
         } else {
             idle.append(webView)
         }
+    }
+
+    /// 丢弃一个已卡死的 webview。若有人在等空闲实例，直接补一个新的，
+    /// 否则 `waiters` 会永远挂起。
+    private func discard(_ webView: WKWebView) {
+        webView.stopLoading()
+        webView.navigationDelegate = nil
+        if created > 0 { created -= 1 }
+        if let waiter = waiters.first {
+            waiters.removeFirst()
+            created += 1
+            waiter.resume(returning: makeWebView())
+        }
+    }
+
+    private static func isTimeout(_ error: Error) -> Bool {
+        if case NetworkError.timeout = error { return true }
+        return false
     }
 
     private func makeWebView() -> WKWebView {
@@ -819,18 +847,48 @@ final class RuleWebViewPool {
         }
     }
 
+    /// 保证 `run` 的 continuation 只 resume 一次（JS 回调与超时互相竞争）。
+    private final class ScriptWaiter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<Any?, Error>?
+        private var finished = false
+
+        func bind(_ continuation: CheckedContinuation<Any?, Error>) {
+            lock.lock()
+            self.continuation = continuation
+            lock.unlock()
+        }
+
+        func finish(_ result: Result<Any?, Error>) {
+            lock.lock()
+            guard !finished, let continuation else {
+                lock.unlock()
+                return
+            }
+            finished = true
+            self.continuation = nil
+            lock.unlock()
+            continuation.resume(with: result)
+        }
+    }
+
     private func run(script: String, in webView: WKWebView) async throws -> Any? {
-        try await withThrowingTaskGroup(of: Any?.self) { group in
-            group.addTask { @MainActor in
-                try await webView.evaluateJavaScript(script)
+        let waiter = ScriptWaiter()
+        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Any?, Error>) in
+            waiter.bind(continuation)
+            webView.evaluateJavaScript(script) { result, error in
+                if let error {
+                    waiter.finish(.failure(error))
+                } else {
+                    waiter.finish(.success(result))
+                }
             }
-            group.addTask {
-                try await Task.sleep(nanoseconds: 3_000_000_000)
-                throw NetworkError.timeout
+            // 超时只负责 resume 一次，不再用结构化并发等待 JS 回调；
+            // 否则 evaluateJavaScript 永不回调时这里会永久挂住。
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                waiter.finish(.failure(NetworkError.timeout))
             }
-            defer { group.cancelAll() }
-            guard let first = try await group.next() else { return nil }
-            return first
         }
     }
 }

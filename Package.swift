@@ -21,7 +21,7 @@ let package = Package(
             ],
             path: "Sources/Bookworm",
             resources: [
-                .copy("Resources/Color_orb.usdz")
+                .copy("Resources/onboarding_book.gif")
             ],
             swiftSettings: [
                 // Keep Swift 5 semantics — Swift 6 strict-concurrency surfaces

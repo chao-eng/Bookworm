@@ -16,11 +16,18 @@ final class ReaderWindowController: NSObject {
         guard let item = library.item(withID: itemID) else { return }
 
         let root: AnyView
+        // 本地书籍的 ReaderModel 在这里创建并直接开始加载，不再依赖
+        // SwiftUI 的 onAppear（窗口偶发不触发该回调时会导致一直停在
+        // “正在打开书籍…”的初始状态）。
+        var localHolder: ReaderModelHolder?
         if item.format == .online {
             root = AnyView(OnlineReaderView(itemID: itemID)
                 .environmentObject(library))
         } else {
-            root = AnyView(ReaderView(itemID: itemID)
+            let holder = ReaderModelHolder()
+            holder.install(ReaderModel(itemID: itemID, library: library))
+            localHolder = holder
+            root = AnyView(ReaderView(itemID: itemID, model: holder)
                 .environmentObject(library))
         }
 
@@ -61,6 +68,7 @@ final class ReaderWindowController: NSObject {
 
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        localHolder?.value?.load()
     }
 
     func bringToFront(itemID: ComicItem.ID) {
@@ -130,10 +138,11 @@ final class ReaderWindowController: NSObject {
 /// entry point; double-clicking a library card uses `ReaderWindowController`.
 struct ReaderWindowHost: View {
     let itemID: ComicItem.ID?
+    @StateObject private var holder = ReaderModelHolder()
 
     var body: some View {
         if let id = itemID {
-            ReaderView(itemID: id)
+            ReaderView(itemID: id, model: holder)
         } else {
             Text("未选择书籍。")
                 .foregroundStyle(.secondary)

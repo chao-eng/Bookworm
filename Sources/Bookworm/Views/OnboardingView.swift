@@ -11,26 +11,16 @@ struct OnboardingView: View {
             VStack(spacing: 0) {
                 Spacer(minLength: 32)
 
-                USDZView()
+                PaperBookHero(size: 400)
                     .frame(width: 480, height: 480)
-                    .shadow(color: Color(red: 0.55, green: 0.65, blue: 1.0).opacity(0.22),
-                            radius: 70, x: -16, y: 0)
-                    .shadow(color: Color(red: 1.0, green: 0.45, blue: 0.55).opacity(0.22),
-                            radius: 70, x: 16, y: 0)
 
                 Spacer(minLength: 24)
 
-                VStack(spacing: 8) {
-                    Text("为每一个故事而生的阅读器。")
-                        .font(.system(size: 17, weight: .regular, design: .serif))
-                        .italic()
-                        .foregroundStyle(Color.white.opacity(0.78))
-                    Text("漫画、日漫与电子书，尽在这一方安静之地。")
-                        .font(.system(size: 17, weight: .regular, design: .serif))
-                        .italic()
-                        .foregroundStyle(Color.white.opacity(0.78))
-                }
-                .multilineTextAlignment(.center)
+                Text("把书架放进桌面一角，把故事留给自己。")
+                    .font(.system(size: 17, weight: .regular, design: .serif))
+                    .italic()
+                    .foregroundStyle(Color.white.opacity(0.78))
+                    .multilineTextAlignment(.center)
 
                 Spacer(minLength: 36)
 

@@ -9,6 +9,12 @@ struct SourceManagementView: View {
 
     @State private var pasteText = ""
     @State private var showingPaste = false
+    @State private var showingURLImport = false
+    @State private var urlText = ""
+    @State private var urlBusy = false
+    @State private var urlImportError: String?
+    /// 进行中的链接下载任务，弹窗关闭时取消，避免取消后仍弹出预览。
+    @State private var urlImportTask: Task<Void, Never>?
     @State private var importPreview: ImportPreviewBox?
     @State private var importError: String?
     @State private var editingSource: BookSource?
@@ -50,6 +56,9 @@ struct SourceManagementView: View {
         .sheet(isPresented: $showingPaste) {
             pasteSheet
         }
+        .sheet(isPresented: $showingURLImport) {
+            urlImportSheet
+        }
         .sheet(item: $importPreview) { box in
             ImportPreviewSheet(preview: box.preview) { resolution in
                 let result = repository.apply(box.preview, resolution: resolution)
@@ -80,8 +89,9 @@ struct SourceManagementView: View {
             Text("书源管理").font(.title3.bold())
             Spacer()
             Menu("导入") {
-                Button("从文件导入…") { importFromFile() }
-                Button("粘贴 JSON…") { showingPaste = true }
+                Button("从文件导入") { importFromFile() }
+                Button("从链接导入") { openURLImport() }
+                Button("粘贴 JSON") { showingPaste = true }
             }
             .menuStyle(.borderlessButton)
             .frame(width: 70)
@@ -117,9 +127,10 @@ struct SourceManagementView: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
             HStack {
-                Button("从文件导入…") { importFromFile() }
+                Button("从文件导入") { importFromFile() }
                     .buttonStyle(.borderedProminent)
-                Button("粘贴 JSON…") { showingPaste = true }
+                Button("从链接导入") { openURLImport() }
+                Button("粘贴 JSON") { showingPaste = true }
             }
             Spacer()
         }
@@ -283,6 +294,112 @@ struct SourceManagementView: View {
             return
         }
         handleImportData(data)
+    }
+
+    /// 打开链接导入弹窗，清掉上一次的输入、错误与残留任务。
+    private func openURLImport() {
+        urlText = ""
+        urlImportError = nil
+        urlBusy = false
+        urlImportTask = nil
+        showingURLImport = true
+    }
+
+    /// 从 http(s) 链接下载书源 JSON，下载完成后复用同一套预览流程。
+    private func startURLImport() {
+        // 回车（onSubmit）与「导入」按钮共用入口，防止下载中重复触发并发下载。
+        guard !urlBusy else { return }
+        let raw = urlText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: raw),
+              let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              url.host != nil else {
+            urlImportError = "请输入以 http:// 或 https:// 开头的有效链接"
+            return
+        }
+        urlImportError = nil
+        urlBusy = true
+        urlImportTask = Task {
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 25
+            request.setValue(
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+                forHTTPHeaderField: "User-Agent"
+            )
+            request.setValue("application/json,text/plain,*/*", forHTTPHeaderField: "Accept")
+            do {
+                let (data, response) = try await URLSession.shared.data(for: request)
+                // 用户已关闭弹窗：不再弹预览、也不动已重置的状态。
+                guard !Task.isCancelled else { return }
+                let status = (response as? HTTPURLResponse)?.statusCode ?? -1
+                guard status == 200 else {
+                    await MainActor.run {
+                        urlBusy = false
+                        urlImportError = "下载失败：服务器返回 \(status)"
+                    }
+                    return
+                }
+                await MainActor.run {
+                    urlBusy = false
+                    showingURLImport = false
+                    handleImportData(data)
+                }
+            } catch {
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    urlBusy = false
+                    urlImportError = "下载失败：\(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    private var urlImportSheet: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                sheetCloseButton { showingURLImport = false }
+                Text("从链接导入书源").font(.headline)
+                Spacer()
+            }
+            .padding(16)
+            Divider()
+            VStack(alignment: .leading, spacing: 10) {
+                Text("填入返回书源 JSON 的 http(s) 地址，支持 [ … ] 或 {\"sources\": [ … ]} 格式。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                TextField("https://www.luoxx.top/book_source.txt", text: $urlText)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(.body, design: .monospaced))
+                    .onSubmit { startURLImport() }
+                if let urlImportError {
+                    Text(urlImportError)
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .lineLimit(4)
+                        .textSelection(.enabled)
+                }
+            }
+            .padding(16)
+            Divider()
+            HStack(spacing: 12) {
+                if urlBusy {
+                    ProgressView().controlSize(.small)
+                    Text("下载中…").font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("取消") { showingURLImport = false }
+                Button("导入") { startURLImport() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(urlBusy || urlText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+            .padding(12)
+        }
+        .frame(width: 600, height: 200)
+        .onDisappear {
+            // 弹窗以任何方式关闭（取消按钮、左上角关闭、Esc）都中止进行中的下载。
+            urlImportTask?.cancel()
+            urlImportTask = nil
+        }
     }
 
     private func handleImportData(_ data: Data) {

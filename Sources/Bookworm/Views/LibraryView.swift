@@ -412,21 +412,24 @@ struct LibraryCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             ZStack(alignment: .bottomTrailing) {
-                Group {
+                ZStack {
+                    Rectangle().fill(Color.gray.opacity(0.18))
                     if let thumb = thumbnail {
                         Image(nsImage: thumb)
                             .resizable()
                             .aspectRatio(contentMode: .fill)
                     } else {
-                        ZStack {
-                            Rectangle().fill(Color.gray.opacity(0.18))
-                            Image(systemName: "book.closed")
-                                .font(.system(size: 36))
-                                .foregroundStyle(.secondary)
-                        }
+                        // 没有封面时把书名放在封面中心，避免只留一个空框。
+                        Text(item.title)
+                            .font(.callout.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .lineLimit(4)
+                            .padding(12)
                     }
                 }
                 .frame(width: width, height: width * 1.45)
+                .clipped()
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 .overlay(alignment: .bottom) { progressBar }
                 .overlay(
@@ -447,45 +450,14 @@ struct LibraryCard: View {
             }
             .overlay(alignment: .topTrailing) { onlineBadges }
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(item.title)
-                    .font(.callout.weight(.semibold))
-                    .lineLimit(2)
-                    .multilineTextAlignment(.leading)
-                if item.isOnline {
-                    if let total = item.pageCount, total > 0 {
-                        Text("第 \(min((item.lastReadChapter ?? 0) + 1, total)) / \(total) 章")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        ProgressView(value: item.progressFraction ?? 0)
-                            .progressViewStyle(.linear)
-                            .controlSize(.mini)
-                    } else {
-                        Text(sourceName ?? "在线")
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
-                    }
-                } else if let total = item.pageCount {
-                    if item.lastReadPage > 0 {
-                        Text("第 \(item.lastReadPage + 1) / \(total) 页")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        ProgressView(value: Double(item.lastReadPage + 1),
-                                     total: Double(max(total, 1)))
-                            .progressViewStyle(.linear)
-                            .controlSize(.mini)
-                    } else {
-                        Text("共 \(total) 页")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                } else {
-                    Text(item.format.displayName)
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                }
-            }
-            .frame(width: width, alignment: .leading)
+            // 封面下方只保留阅读进度，书名与页数不再显示；
+            // 固定行高让每张卡片高度一致，网格不会因文字换行而错位。
+            Text(progressLabel)
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(item.isFinished ? Color.green : .secondary)
+                .lineLimit(1)
+                .frame(width: width, height: 16, alignment: .leading)
+                .help(item.title)
         }
         .contentShape(Rectangle())
         .onAppear(perform: loadThumbnail)
@@ -496,8 +468,17 @@ struct LibraryCard: View {
         }
     }
 
-    /// Corner badge: a green check once finished, otherwise a "% read"
-    /// pill for books in progress. Nothing for untouched books.
+    /// 底部进度文案：已读完 / 已读百分比 / 未读。
+    private var progressLabel: String {
+        if item.isFinished { return "已读完" }
+        if let frac = item.progressFraction, hasProgress {
+            return "已读 \(Int((frac * 100).rounded()))%"
+        }
+        return "未读"
+    }
+
+    /// Corner badge: a green check once finished. 百分比已移到封面下方，
+    /// 这里不再重复显示。
     @ViewBuilder
     private var progressBadge: some View {
         if item.isFinished {
@@ -506,14 +487,6 @@ struct LibraryCard: View {
                 .foregroundStyle(.white)
                 .padding(5)
                 .background(Color.green, in: Circle())
-                .padding(6)
-        } else if let frac = item.progressFraction, hasProgress {
-            Text("\(Int((frac * 100).rounded()))%")
-                .font(.caption2.bold().monospacedDigit())
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(.tint, in: Capsule())
-                .foregroundStyle(.white)
                 .padding(6)
         }
     }

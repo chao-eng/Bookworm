@@ -766,7 +766,8 @@ final class ReaderModel: ObservableObject {
 struct ReaderView: View {
     let itemID: ComicItem.ID
     @EnvironmentObject var library: LibraryStore
-    @StateObject private var model: ReaderModelHolder = ReaderModelHolder()
+    /// 由 ReaderWindowController 在开窗时创建并注入，加载也在那里直接触发。
+    @ObservedObject var model: ReaderModelHolder
     /// 当前阅读内容里可垂直滚动的视图，供 ↑/↓ 使用。
     @State private var scrollBridge = ReaderScrollBridge()
     @ObservedObject private var ebook = EbookSettings.shared
@@ -857,6 +858,8 @@ struct ReaderView: View {
             onSwipe: { handleSwipe(deltaX: $0) }
         ))
         .onAppear {
+            // 正常路径已由 ReaderWindowController 注入模型并调用 load()，
+            // 这里只兜底其它构造入口（如 ReaderWindowHost）。
             if model.value == nil {
                 let m = ReaderModel(itemID: itemID, library: library)
                 model.install(m)

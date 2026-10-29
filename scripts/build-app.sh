@@ -54,10 +54,10 @@ if [[ -d "${RES_BUNDLE}" ]]; then
 fi
 
 # Also copy the resources flat into Contents/Resources/ so Bundle.main can
-# find them directly. This lets USDZView.locateResource skip Bundle.module
+# find them directly. This lets the hero view skip Bundle.module
 # (whose initializer calls `fatalError` if the SPM bundle is missing from
 # disk, which has been observed to SIGTRAP packaged .apps on some macOS
-# versions). Copying twice costs ~150 KB.
+# versions). Copying twice costs a few hundred KB.
 for r in Sources/Bookworm/Resources/*; do
   [[ -e "$r" ]] || continue
   cp -R "$r" "${BUNDLE_DIR}/Contents/Resources/"

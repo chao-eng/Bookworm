@@ -330,7 +330,7 @@ struct FloatingSettingsView: View {
     }
 }
 
-/// 设置窗口：菜单「悬浮窗 ▸ 悬浮窗设置…」打开，避免打断当前阅读窗。
+/// 设置窗口：菜单「悬浮窗 ▸ 设置」打开，避免打断当前阅读窗。
 @MainActor
 final class FloatingSettingsWindow {
     static let shared = FloatingSettingsWindow()

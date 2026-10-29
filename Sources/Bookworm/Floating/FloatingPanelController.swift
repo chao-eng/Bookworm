@@ -1062,6 +1062,80 @@ final class FloatingHostingView<Content: View>: NSHostingView<Content> {
     }
 }
 
+// MARK: - 正文绘制
+
+/// 悬浮窗正文页：与 `TextPaginator` 共用 TextKit 排版（同一份字号与行距），
+/// 保证「页」的切分与绘制完全一致，不会出现末行被截断丢失文字。
+private struct FloatingTextPage: NSViewRepresentable {
+    let text: String
+    let fontSize: CGFloat
+    let color: Color?
+
+    func makeNSView(context: Context) -> FloatingTextPageNSView { FloatingTextPageNSView() }
+
+    func updateNSView(_ view: FloatingTextPageNSView, context: Context) {
+        view.update(text: text,
+                    fontSize: fontSize,
+                    nsColor: color.map { NSColor($0) })
+    }
+}
+
+private final class FloatingTextPageNSView: NSView {
+    private let storage = NSTextStorage()
+    private let layoutManager = NSLayoutManager()
+    private let container = NSTextContainer(size: .zero)
+
+    private var pageText = ""
+    private var fontSize: CGFloat = 0
+    private var nsColor: NSColor?
+    /// 与分页使用的行距保持一致。
+    private static let lineSpacing: CGFloat = 6
+
+    override var isFlipped: Bool { true }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        container.lineFragmentPadding = 0
+        storage.addLayoutManager(layoutManager)
+        layoutManager.addTextContainer(container)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    func update(text: String, fontSize: CGFloat, nsColor: NSColor?) {
+        guard text != pageText || fontSize != self.fontSize || nsColor != self.nsColor else { return }
+        pageText = text
+        self.fontSize = fontSize
+        self.nsColor = nsColor
+        applyText()
+    }
+
+    override func layout() {
+        super.layout()
+        guard container.size != bounds.size else { return }
+        container.size = bounds.size
+        needsDisplay = true
+    }
+
+    private func applyText() {
+        var attributes = TextPaginator.attributes(fontSize: fontSize,
+                                                 lineSpacing: Self.lineSpacing)
+        attributes[.foregroundColor] = nsColor ?? NSColor.labelColor
+        storage.setAttributedString(NSAttributedString(string: pageText, attributes: attributes))
+        container.size = bounds.size
+        needsDisplay = true
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard container.size.width > 0, container.size.height > 0 else { return }
+        let glyphRange = layoutManager.glyphRange(for: container)
+        guard glyphRange.length > 0 else { return }
+        layoutManager.drawBackground(forGlyphRange: glyphRange, at: .zero)
+        layoutManager.drawGlyphs(forGlyphRange: glyphRange, at: .zero)
+    }
+}
+
 // MARK: - 视图
 
 struct FloatingPanelView: View {
@@ -1193,10 +1267,11 @@ struct FloatingPanelView: View {
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            Text(model.pageText)
-                .font(.system(size: model.state.fontSize))
-                .lineSpacing(6)
-                .foregroundStyle(fontColor ?? Color.primary)
+            // 用 TextKit 绘制正文：分页与渲染共用同一套排版，避免 SwiftUI Text
+            // 的行高逐行偏大导致每页末行被截断成「…」（正文缺失）。
+            FloatingTextPage(text: model.pageText,
+                             fontSize: CGFloat(model.state.fontSize),
+                             color: fontColor)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .padding(.horizontal, 14)
                 .padding(.top, 30)

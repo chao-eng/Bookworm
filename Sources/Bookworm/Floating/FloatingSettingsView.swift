@@ -164,6 +164,23 @@ struct FloatingSettingsView: View {
                 set: { model.setShowMiniPercent($0) }
             ))
             .toggleStyle(.switch)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("窗口标题")
+                Picker("", selection: Binding(
+                    get: { model.state.windowTitle },
+                    set: { model.setWindowTitleMode($0) }
+                )) {
+                    ForEach(FloatingState.WindowTitle.allCases, id: \.self) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                .pickerStyle(.radioGroup)
+                .labelsHidden()
+                Text("控制顶部书名与章节标题栏（含迷你、隐藏、关闭按钮）；鼠标移出隐藏即悬停时显示。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 

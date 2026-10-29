@@ -328,6 +328,12 @@ final class FloatingPanelController: NSObject, ObservableObject {
         persistSoon()
     }
 
+    func setWindowTitleMode(_ mode: FloatingState.WindowTitle) {
+        guard state.windowTitle != mode else { return }
+        state.windowTitle = mode
+        persistSoon()
+    }
+
     func setQuickHideMode(_ mode: FloatingState.QuickHide) {
         guard state.quickHide != mode else { return }
         // 先按旧模式恢复窗口，再切换到新模式。
@@ -1157,7 +1163,7 @@ struct FloatingPanelView: View {
                 .foregroundStyle(.secondary)
                 .padding(.trailing, 14)
                 .padding(.bottom, 8)
-            if hovering {
+            if showsHeader {
                 header
             }
             if let notice = model.notice {
@@ -1237,6 +1243,15 @@ struct FloatingPanelView: View {
         }
         .padding(.horizontal, 20)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// 标题栏显示方式：不显示 / 常显 / 鼠标移出隐藏（悬停显示）。
+    private var showsHeader: Bool {
+        switch model.state.windowTitle {
+        case .hidden: return false
+        case .always: return true
+        case .hideOnExit: return hovering
+        }
     }
 
     private var header: some View {

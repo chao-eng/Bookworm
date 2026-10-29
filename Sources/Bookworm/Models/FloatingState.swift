@@ -53,6 +53,21 @@ struct FloatingState: Codable, Equatable {
         }
     }
 
+    /// 悬浮窗顶部标题栏的显示方式。
+    enum WindowTitle: Int, Codable, CaseIterable {
+        case hidden = 0
+        case always = 1
+        case hideOnExit = 2
+
+        var title: String {
+            switch self {
+            case .hidden: return "不显示窗口标题"
+            case .always: return "显示窗口标题"
+            case .hideOnExit: return "鼠标移出隐藏"
+            }
+        }
+    }
+
     /// 鼠标移出悬浮窗后的快速隐藏方式。
     enum QuickHide: Int, Codable, CaseIterable {
         case off = 0
@@ -91,6 +106,8 @@ struct FloatingState: Codable, Equatable {
     var showMiniPercent: Bool
     /// 鼠标左/右键翻页映射。
     var mousePageTurn: MousePageTurn
+    /// 顶部标题栏显示方式。
+    var windowTitle: WindowTitle
     /// 鼠标移出后的快速隐藏方式。
     var quickHide: QuickHide
     /// 动作 → 热键绑定；nil 表示该动作置空禁用（BR-56）。
@@ -109,6 +126,7 @@ struct FloatingState: Codable, Equatable {
          lastChapterIndex: Int? = nil,
          showMiniPercent: Bool = true,
          mousePageTurn: MousePageTurn = .off,
+         windowTitle: WindowTitle = .hideOnExit,
          quickHide: QuickHide = .off,
          hotkeys: [String: HotkeyBinding]? = nil) {
         self.isVisible = isVisible
@@ -124,6 +142,7 @@ struct FloatingState: Codable, Equatable {
         self.lastChapterIndex = lastChapterIndex
         self.showMiniPercent = showMiniPercent
         self.mousePageTurn = mousePageTurn
+        self.windowTitle = windowTitle
         self.quickHide = quickHide
         self.hotkeys = hotkeys
     }
@@ -145,6 +164,7 @@ struct FloatingState: Codable, Equatable {
         lastChapterIndex = try? c.decodeIfPresent(Int.self, forKey: .lastChapterIndex)
         showMiniPercent = (try? c.decode(Bool.self, forKey: .showMiniPercent)) ?? true
         mousePageTurn = (try? c.decode(MousePageTurn.self, forKey: .mousePageTurn)) ?? .off
+        windowTitle = (try? c.decode(WindowTitle.self, forKey: .windowTitle)) ?? .hideOnExit
         quickHide = (try? c.decode(QuickHide.self, forKey: .quickHide)) ?? .off
         hotkeys = try? c.decodeIfPresent([String: HotkeyBinding].self, forKey: .hotkeys)
     }

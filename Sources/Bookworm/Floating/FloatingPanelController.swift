@@ -17,8 +17,12 @@ final class FloatingPanelController: NSObject, ObservableObject {
     @Published private(set) var pageCount: Int = 0
     /// 临时提示（已经是最后一页 / 加载超时等），2 秒后自动消失。
     @Published private(set) var notice: String?
+    /// 快速隐藏是否已生效（窗口整体透明 / 只剩百分比 / 缩成小图标）。
+    @Published private(set) var quickHidden = false
 
     private static let miniSize = CGSize(width: 260, height: 44)
+    /// 快速隐藏时收起的小图标尺寸。
+    private static let quickHideIconSize = CGSize(width: 44, height: 44)
     /// 迷你条宽度可拖动范围。
     private static let minMiniWidth: CGFloat = 160
     private static let maxMiniWidth: CGFloat = 760
@@ -58,8 +62,10 @@ final class FloatingPanelController: NSObject, ObservableObject {
     }
     /// 迷你正文上一次排版采用的字号；字号变了要重排。
     private var miniPaginatedFontSize: CGFloat = 0
-    /// 迷你条中正文以外的固定占用：百分比 30 + 一段间距 6 + 左右内边距 24。
-    private static let miniChromeWidth: CGFloat = 60
+    /// 迷你条中正文以外的固定占用：左右内边距 24，百分比可见时再加 30 + 一段间距 6。
+    private var miniChromeWidth: CGFloat {
+        state.showMiniPercent ? 60 : 26
+    }
     /// 迷你正文上一次排版采用的宽度；宽度变了要重排，才能始终铺满整条。
     private var miniPaginatedWidth: CGFloat = 0
 
@@ -73,6 +79,13 @@ final class FloatingPanelController: NSObject, ObservableObject {
 
     private var wheelAccum: CGFloat = 0
     private var lastWheelTurn: Date = .distantPast
+
+    /// 快速隐藏前窗口的位置与尺寸限制，恢复时原样还原。
+    private var quickHideSavedFrame: CGRect = .zero
+    private var quickHideSavedMinSize: CGSize = .zero
+    private var quickHideSavedMaxSize: CGSize = .zero
+    /// 整体隐藏（只剩透明区域）时用全局鼠标移动监听判断移回。
+    private var quickHideMouseMonitor: Any?
 
     private override init() {
         state = FloatingStateStore.load()
@@ -106,7 +119,7 @@ final class FloatingPanelController: NSObject, ObservableObject {
     // MARK: - 显隐与模式
 
     var isPanelVisible: Bool {
-        panel?.isVisible == true && state.mode != .hidden
+        panel?.isVisible == true && state.mode != .hidden && !quickHidden
     }
 
     func toggle() {
@@ -125,6 +138,8 @@ final class FloatingPanelController: NSObject, ObservableObject {
             return
         }
 
+        // 快速隐藏状态下唤出：先恢复原窗口，再按目标模式重新布局。
+        cancelQuickHide(restoringFrame: true)
         let panel = ensurePanel()
         if target == .mini {
             applyMiniFrame(panel)
@@ -151,6 +166,8 @@ final class FloatingPanelController: NSObject, ObservableObject {
     }
 
     func hide() {
+        // 快速隐藏会缩过窗口，先还原真实尺寸再记录位置。
+        cancelQuickHide(restoringFrame: true)
         if state.mode != .hidden {
             lastVisibleMode = state.mode
         }
@@ -194,7 +211,8 @@ final class FloatingPanelController: NSObject, ObservableObject {
     /// 普通态直接记整块 frame；迷你态尺寸固定，只把拖动后的位置折算回去
     /// （左上角对齐），这样下次唤出（含展开回普通态）都停在同一处。
     private func syncVisibleNormalFrame() {
-        guard let panel, panel.isVisible else { return }
+        // 快速隐藏时窗口可能已被缩成小图标，不能拿来当正常尺寸记录。
+        guard let panel, panel.isVisible, !quickHidden else { return }
         if state.mode == .normal {
             normalFrame = Self.clamped(panel.frame)
         } else if state.mode == .mini {
@@ -238,7 +256,7 @@ final class FloatingPanelController: NSObject, ObservableObject {
         let clamped = min(28, max(12, value))
         guard clamped != state.fontSize else { return }
         state.fontSize = clamped
-        if state.mode == .mini, let panel, panel.isVisible {
+        if state.mode == .mini, let panel, panel.isVisible, !quickHidden {
             // 迷你条高度随字号变化，先按新字号调整窗口再重排。
             applyMiniFrame(panel)
             repaginateMiniIfNeeded(force: true)
@@ -289,6 +307,190 @@ final class FloatingPanelController: NSObject, ObservableObject {
             setAutoPageInterval(10)
             showNotice("自动翻页已开启，每 10 秒一页")
         }
+    }
+
+    // MARK: - 迷你百分比 / 鼠标操作 / 快速隐藏
+
+    func setShowMiniPercent(_ value: Bool) {
+        guard state.showMiniPercent != value else { return }
+        state.showMiniPercent = value
+        if state.mode == .mini {
+            // 百分比占用的宽度会变，正文要按新宽度重新折行。
+            repaginateMiniIfNeeded(force: true)
+            updatePage()
+        }
+        persistSoon()
+    }
+
+    func setMousePageTurn(_ mode: FloatingState.MousePageTurn) {
+        guard state.mousePageTurn != mode else { return }
+        state.mousePageTurn = mode
+        persistSoon()
+    }
+
+    func setQuickHideMode(_ mode: FloatingState.QuickHide) {
+        guard state.quickHide != mode else { return }
+        // 先按旧模式恢复窗口，再切换到新模式。
+        cancelQuickHide(restoringFrame: true)
+        state.quickHide = mode
+        persistSoon()
+    }
+
+    /// SwiftUI 悬停状态变化：移出触发快速隐藏，移回按需恢复。
+    func hoverChanged(_ inside: Bool) {
+        guard let panel, panel.isVisible, state.mode != .hidden else { return }
+        guard state.quickHide != .off else { return }
+        if inside {
+            guard quickHidden else { return }
+            // 这两种要等用户双击，悬停不自动恢复。
+            if state.quickHide == .shrinkIconDoubleClick || state.quickHide == .hideDoubleClick {
+                return
+            }
+            cancelQuickHide(restoringFrame: true)
+        } else {
+            beginQuickHide()
+        }
+    }
+
+    private func beginQuickHide() {
+        guard !quickHidden, let panel, panel.isVisible, state.mode != .hidden else { return }
+        let mode = state.quickHide
+        guard mode != .off else { return }
+        // 某些情况下悬停结束事件会在鼠标仍在窗口内时误报（例如恢复窗口后追踪区刷新），
+        // 此时若收起就会和「移回显示」互相拉扯，直接忽略。
+        guard !panel.frame.contains(NSEvent.mouseLocation) else { return }
+        quickHidden = true
+        switch mode {
+        case .off:
+            break
+        case .hideOnExit, .keepPercent:
+            // 窗口仍然占着原来的位置但看不见（或只剩百分比）：
+            // 让点击穿透到下层应用，再靠全局鼠标移动监听判断「移回」。
+            panel.ignoresMouseEvents = true
+            startQuickHideMouseMonitor()
+        case .hideDoubleClick:
+            // 需要双击窗口区域恢复，窗口必须继续接收鼠标事件。
+            panel.ignoresMouseEvents = false
+        case .shrinkIcon, .shrinkIconDoubleClick:
+            shrinkPanelToIcon(panel)
+        }
+    }
+
+    /// 恢复快速隐藏前的窗口状态；`restoringFrame` 为 true 时还原被缩小的尺寸。
+    private func cancelQuickHide(restoringFrame: Bool) {
+        guard quickHidden else { return }
+        quickHidden = false
+        stopQuickHideMouseMonitor()
+        guard let panel else { return }
+        panel.ignoresMouseEvents = false
+        let mode = state.quickHide
+        guard restoringFrame,
+              mode == .shrinkIcon || mode == .shrinkIconDoubleClick else { return }
+        panel.minSize = quickHideSavedMinSize
+        panel.maxSize = quickHideSavedMaxSize
+        panel.setFrame(quickHideSavedFrame, display: true)
+        if state.mode == .mini {
+            repaginateMiniIfNeeded(force: true)
+        } else {
+            repaginateIfNeeded(force: true)
+        }
+        updatePage()
+    }
+
+    private func shrinkPanelToIcon(_ panel: FloatingPanel) {
+        quickHideSavedFrame = panel.frame
+        quickHideSavedMinSize = panel.minSize
+        quickHideSavedMaxSize = panel.maxSize
+        let size = Self.quickHideIconSize
+        panel.minSize = size
+        panel.maxSize = size
+        // 图标停在原窗口的右下角，和百分比位置保持一致。
+        let origin = CGPoint(x: panel.frame.maxX - size.width,
+                             y: panel.frame.minY)
+        panel.setFrame(CGRect(origin: origin, size: size), display: true)
+    }
+
+    private func startQuickHideMouseMonitor() {
+        stopQuickHideMouseMonitor()
+        quickHideMouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved]) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.quickHidden, let panel = self.panel else { return }
+                if panel.frame.contains(NSEvent.mouseLocation) {
+                    self.cancelQuickHide(restoringFrame: true)
+                }
+            }
+        }
+    }
+
+    private func stopQuickHideMouseMonitor() {
+        if let quickHideMouseMonitor {
+            NSEvent.removeMonitor(quickHideMouseMonitor)
+            self.quickHideMouseMonitor = nil
+        }
+    }
+
+    /// 左键：快速隐藏态下用于「双击恢复」，否则按设置翻页。
+    /// 返回 true 表示事件已被消费，不再交给 SwiftUI（避免误触按钮/菜单）。
+    private func handlePanelMouseDown(_ event: NSEvent) -> Bool {
+        if quickHidden {
+            guard state.quickHide == .hideDoubleClick
+                    || state.quickHide == .shrinkIconDoubleClick else { return false }
+            if event.clickCount >= 2 { cancelQuickHide(restoringFrame: true) }
+            return true
+        }
+        guard state.mousePageTurn != .off, state.mode != .hidden else { return false }
+        guard event.clickCount == 1, !isInHeaderArea(event) else { return false }
+        guard canMousePage else { return false }
+        switch state.mousePageTurn {
+        case .off:
+            return false
+        case .prevWithLeft:
+            prevPage()
+            return true
+        case .prevWithRight:
+            nextPage()
+            return true
+        }
+    }
+
+    /// 右键：快速隐藏态下用于「双击恢复」，否则按设置翻页；
+    /// 按住 ⌥ / ⌃ / ⌘ 时保留右键菜单，便于随时打开设置。
+    private func handlePanelRightMouseDown(_ event: NSEvent) -> Bool {
+        if quickHidden {
+            guard state.quickHide == .hideDoubleClick
+                    || state.quickHide == .shrinkIconDoubleClick else { return false }
+            if event.clickCount >= 2 { cancelQuickHide(restoringFrame: true) }
+            return true
+        }
+        guard state.mousePageTurn != .off, state.mode != .hidden else { return false }
+        let modifiers: NSEvent.ModifierFlags = [.option, .control, .command]
+        guard event.modifierFlags.intersection(modifiers).isEmpty else { return false }
+        guard event.clickCount == 1, !isInHeaderArea(event) else { return false }
+        guard canMousePage else { return false }
+        switch state.mousePageTurn {
+        case .off:
+            return false
+        case .prevWithLeft:
+            nextPage()
+            return true
+        case .prevWithRight:
+            prevPage()
+            return true
+        }
+    }
+
+    /// 占位态、加载中、以及错误页（含「重试」按钮）不接管鼠标点击，
+    /// 避免鼠标翻页把界面上的按钮一起挡住。
+    private var canMousePage: Bool {
+        let session = ReadingSession.shared
+        guard session.isActive, !session.isLoading else { return false }
+        return session.lastError == nil || !session.text.isEmpty
+    }
+
+    /// 顶部 26pt 是悬浮按钮栏（迷你、隐藏、关闭），鼠标翻页要避开。
+    private func isInHeaderArea(_ event: NSEvent) -> Bool {
+        guard state.mode == .normal, let panel else { return false }
+        return event.locationInWindow.y >= panel.frame.height - 26
     }
 
     // MARK: - 热键分发
@@ -461,7 +663,7 @@ final class FloatingPanelController: NSObject, ObservableObject {
     /// 迷你条正文可用宽度：按面板当前真实宽度减去固定占用，保证文字铺满整条。
     private func miniTextWidth() -> CGFloat {
         let width = panel?.frame.width ?? Self.miniSize.width
-        return max(60, width - Self.miniChromeWidth - 2)
+        return max(60, width - miniChromeWidth - 2)
     }
 
     /// 按当前显示模式取页表：正常态用面板排版结果，精简态用单行排版结果。
@@ -551,7 +753,14 @@ final class FloatingPanelController: NSObject, ObservableObject {
         panel.onScrollDelta = { [weak self] delta in
             Task { @MainActor in self?.handleScroll(delta) }
         }
-        panel.contentView = NSHostingView(rootView: FloatingPanelView(model: self))
+        let hosting = FloatingHostingView(rootView: FloatingPanelView(model: self))
+        hosting.onMouseDown = { [weak self] event in
+            self?.handlePanelMouseDown(event) ?? false
+        }
+        hosting.onRightMouseDown = { [weak self] event in
+            self?.handlePanelRightMouseDown(event) ?? false
+        }
+        panel.contentView = hosting
         self.panel = panel
         observeWindow(panel)
         return panel
@@ -630,8 +839,9 @@ final class FloatingPanelController: NSObject, ObservableObject {
     }
 
     private func panelFrameChanged() {
-        // 隐藏态不采信任何帧变化，避免把过渡态尺寸写进正常态基准。
-        guard let panel, state.mode != .hidden else { return }
+        // 隐藏态不采信任何帧变化，避免把过渡态尺寸写进正常态基准；
+        // 快速隐藏缩成图标时同样不记录，否则会把 44pt 图标当成正常尺寸。
+        guard let panel, state.mode != .hidden, !quickHidden else { return }
         if state.mode == .mini {
             normalFrame.origin.x = panel.frame.origin.x
             normalFrame.origin.y = panel.frame.maxY - normalFrame.height
@@ -652,7 +862,7 @@ final class FloatingPanelController: NSObject, ObservableObject {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor in
-                guard let self, let panel = self.panel else { return }
+                guard let self, let panel = self.panel, !self.quickHidden else { return }
                 self.normalFrame = Self.clamped(self.normalFrame)
                 if self.state.mode == .mini {
                     self.applyMiniFrame(panel)
@@ -672,7 +882,7 @@ final class FloatingPanelController: NSObject, ObservableObject {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor in
-                guard let self, let panel = self.panel else { return }
+                guard let self, let panel = self.panel, !self.quickHidden else { return }
                 self.normalFrame = Self.clamped(self.normalFrame)
                 if self.state.mode == .mini {
                     self.applyMiniFrame(panel)
@@ -829,6 +1039,23 @@ final class FloatingPanel: NSPanel {
     }
 }
 
+/// 承载悬浮窗内容的宿主视图：拦一层鼠标按下事件，用于左/右键翻页与双击恢复。
+/// 返回 true 表示事件已被消费，不再交给 SwiftUI。
+final class FloatingHostingView<Content: View>: NSHostingView<Content> {
+    var onMouseDown: ((NSEvent) -> Bool)?
+    var onRightMouseDown: ((NSEvent) -> Bool)?
+
+    override func mouseDown(with event: NSEvent) {
+        if onMouseDown?(event) == true { return }
+        super.mouseDown(with: event)
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        if onRightMouseDown?(event) == true { return }
+        super.rightMouseDown(with: event)
+    }
+}
+
 // MARK: - 视图
 
 struct FloatingPanelView: View {
@@ -838,17 +1065,67 @@ struct FloatingPanelView: View {
 
     var body: some View {
         ZStack {
-            background
-            if model.state.mode == .mini {
+            if showsBackground { background }
+            if model.quickHidden {
+                quickHiddenBody
+            } else if model.state.mode == .mini {
                 miniBody
             } else {
                 normalBody
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         .opacity(model.state.opacity)
-        .onHover { hovering = $0 }
+        .onHover { inside in
+            hovering = inside
+            model.hoverChanged(inside)
+        }
         .contextMenu { menu }
+    }
+
+    /// 完全隐藏 / 只留百分比时不能铺满背景，否则「隐藏」只是变成了纯色块。
+    private var showsBackground: Bool {
+        guard model.quickHidden else { return true }
+        return isIconQuickHide
+    }
+
+    private var cornerRadius: CGFloat {
+        model.quickHidden && isIconQuickHide ? 10 : 14
+    }
+
+    private var isIconQuickHide: Bool {
+        model.state.quickHide == .shrinkIcon || model.state.quickHide == .shrinkIconDoubleClick
+    }
+
+    /// 快速隐藏态的极简外观：完全透明 / 只留右下角百分比 / 缩成小图标。
+    @ViewBuilder
+    private var quickHiddenBody: some View {
+        switch model.state.quickHide {
+        case .hideOnExit, .hideDoubleClick:
+            Color.clear
+        case .keepPercent:
+            VStack {
+                Spacer(minLength: 0)
+                HStack {
+                    Spacer(minLength: 0)
+                    Text(percentLabel)
+                        .font(.system(size: 10, weight: .medium))
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(Capsule().fill(.thinMaterial))
+                }
+            }
+            .padding(8)
+        case .shrinkIcon, .shrinkIconDoubleClick:
+            Image(systemName: "book.fill")
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(fontColor ?? Color.secondary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        case .off:
+            Color.clear
+        }
     }
 
     private var backgroundColor: Color? {
@@ -1003,11 +1280,13 @@ struct FloatingPanelView: View {
                 .foregroundStyle(fontColor ?? Color.primary)
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            Text(percentLabel)
-                .font(.system(size: 10))
-                .monospacedDigit()
-                .foregroundStyle(.secondary)
-                .frame(width: 30, alignment: .trailing)
+            if model.state.showMiniPercent {
+                Text(percentLabel)
+                    .font(.system(size: 10))
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .frame(width: 30, alignment: .trailing)
+            }
         }
         .padding(.horizontal, 12)
     }
@@ -1054,12 +1333,13 @@ struct FloatingPanelView: View {
             Button("每 30 秒") { model.setAutoPageInterval(30) }
         }
         Divider()
-        if model.state.mode == .mini {
-            Button("恢复正常显示") { model.show(mode: .normal) }
-        } else {
-            Button("迷你模式") { model.toggleMini() }
-        }
+        Toggle("迷你模式", isOn: Binding(
+            get: { model.state.mode == .mini },
+            set: { model.show(mode: $0 ? .mini : .normal) }
+        ))
         Button("隐藏悬浮窗") { model.hide() }
+        Divider()
+        Button("设置") { FloatingSettingsWindow.shared.show() }
     }
 }
 

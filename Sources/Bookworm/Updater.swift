@@ -127,7 +127,7 @@ final class Updater: NSObject, ObservableObject {
 
         let controller = SPUStandardUpdaterController(startingUpdater: true,
                                                       updaterDelegate: self,
-                                                      userDriverDelegate: nil)
+                                                      userDriverDelegate: self)
         self.controller = controller
         sparkleCanCheck = controller.updater.canCheckForUpdates
         refreshCanCheck()
@@ -198,5 +198,32 @@ extension Updater: SPUUpdaterDelegate {
     func feedURLString(for updater: SPUUpdater) -> String? {
         guard UpdateProxyConfig.current().isValid else { return nil }
         return UpdateRelayServer.shared.appcastURL
+    }
+}
+
+extension Updater: SPUStandardUserDriverDelegate {
+    /// 「已是新版」弹窗里的「版本历史记录」：还原成原始 GitHub 地址再交给浏览器。
+    /// 转发地址只对 Sparkle 进程有效（随机端口 + 进程内 token），浏览器打开必 403。
+    /// 显式标注 Objective-C 选择器，确保 Sparkle 的 respondsToSelector 能命中。
+    @objc(standardUserDriverShowVersionHistoryForAppcastItem:)
+    func standardUserDriverShowVersionHistory(for item: SUAppcastItem) {
+        guard let notesURL = item.fullReleaseNotesURL ?? item.releaseNotesURL,
+              let target = Self.unwrappedReleaseNotesURL(notesURL) else { return }
+        NSWorkspace.shared.open(target)
+    }
+
+    /// 把 `http://127.0.0.1:<port>/fetch?token=…&url=…` 还原成被转发的原始地址；
+    /// 非转发地址原样返回，转发地址解析失败则返回 nil（宁可不打开也不打开本地地址）。
+    private static func unwrappedReleaseNotesURL(_ url: URL) -> URL? {
+        let isRelay = url.scheme?.lowercased() == "http"
+            && url.host == "127.0.0.1"
+            && url.path == "/fetch"
+        guard isRelay else { return url }
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let raw = components.queryItems?.first(where: { $0.name == "url" })?.value,
+              let original = URL(string: raw),
+              let scheme = original.scheme?.lowercased(),
+              scheme == "http" || scheme == "https" else { return nil }
+        return original
     }
 }

@@ -38,6 +38,42 @@ struct FloatingState: Codable, Equatable {
         case hidden
     }
 
+    /// 鼠标翻页键位映射。
+    enum MousePageTurn: Int, Codable, CaseIterable {
+        case off = 0
+        case prevWithLeft = 1
+        case prevWithRight = 2
+
+        var title: String {
+            switch self {
+            case .off: return "关闭鼠标翻页"
+            case .prevWithLeft: return "上一页：左键；下一页：右键"
+            case .prevWithRight: return "上一页：右键；下一页：左键"
+            }
+        }
+    }
+
+    /// 鼠标移出悬浮窗后的快速隐藏方式。
+    enum QuickHide: Int, Codable, CaseIterable {
+        case off = 0
+        case hideOnExit = 1
+        case keepPercent = 2
+        case shrinkIcon = 3
+        case shrinkIconDoubleClick = 4
+        case hideDoubleClick = 5
+
+        var title: String {
+            switch self {
+            case .off: return "关闭快速隐藏"
+            case .hideOnExit: return "鼠标移出完全隐藏窗口，移回重新显示"
+            case .keepPercent: return "鼠标移出保留右下角百分比不隐藏，移回重新显示"
+            case .shrinkIcon: return "鼠标移出缩小为小图标，移回重新显示"
+            case .shrinkIconDoubleClick: return "鼠标移出缩小为小图标，双击小图标重新显示"
+            case .hideDoubleClick: return "鼠标移出完全隐藏，鼠标双击窗口区域重新显示"
+            }
+        }
+    }
+
     var isVisible: Bool
     var mode: Mode
     var frame: Rect
@@ -51,6 +87,12 @@ struct FloatingState: Codable, Equatable {
     var autoPageInterval: Double?
     var lastBookID: String?
     var lastChapterIndex: Int?
+    /// 快捷操作：迷你条是否显示百分比进度。
+    var showMiniPercent: Bool
+    /// 鼠标左/右键翻页映射。
+    var mousePageTurn: MousePageTurn
+    /// 鼠标移出后的快速隐藏方式。
+    var quickHide: QuickHide
     /// 动作 → 热键绑定；nil 表示该动作置空禁用（BR-56）。
     var hotkeys: [String: HotkeyBinding]?
 
@@ -65,6 +107,9 @@ struct FloatingState: Codable, Equatable {
          autoPageInterval: Double? = nil,
          lastBookID: String? = nil,
          lastChapterIndex: Int? = nil,
+         showMiniPercent: Bool = true,
+         mousePageTurn: MousePageTurn = .off,
+         quickHide: QuickHide = .off,
          hotkeys: [String: HotkeyBinding]? = nil) {
         self.isVisible = isVisible
         self.mode = mode
@@ -77,6 +122,9 @@ struct FloatingState: Codable, Equatable {
         self.autoPageInterval = autoPageInterval
         self.lastBookID = lastBookID
         self.lastChapterIndex = lastChapterIndex
+        self.showMiniPercent = showMiniPercent
+        self.mousePageTurn = mousePageTurn
+        self.quickHide = quickHide
         self.hotkeys = hotkeys
     }
 
@@ -95,6 +143,9 @@ struct FloatingState: Codable, Equatable {
         autoPageInterval = try? c.decodeIfPresent(Double.self, forKey: .autoPageInterval)
         lastBookID = try? c.decodeIfPresent(String.self, forKey: .lastBookID)
         lastChapterIndex = try? c.decodeIfPresent(Int.self, forKey: .lastChapterIndex)
+        showMiniPercent = (try? c.decode(Bool.self, forKey: .showMiniPercent)) ?? true
+        mousePageTurn = (try? c.decode(MousePageTurn.self, forKey: .mousePageTurn)) ?? .off
+        quickHide = (try? c.decode(QuickHide.self, forKey: .quickHide)) ?? .off
         hotkeys = try? c.decodeIfPresent([String: HotkeyBinding].self, forKey: .hotkeys)
     }
 }

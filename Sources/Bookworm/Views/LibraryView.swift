@@ -20,7 +20,8 @@ struct LibraryView: View {
     @ObservedObject private var sources = SourceRepository.shared
     @State private var search: String = ""
     @State private var sort: LibrarySort = .title
-    @State private var cardSize: CGFloat = 180
+    // 封面大小写入偏好配置，下次启动沿用上次的取值。
+    @AppStorage("library.cardSize") private var cardSize: Double = 180
     @State private var serverURL: String? = nil
     @State private var showingServerInfo: Bool = false
     /// 排序结果缓存；进度、扫描进度等高频更新不会触发全量重排。
@@ -103,22 +104,13 @@ struct LibraryView: View {
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 180)
 
-            Button {
+            Button("在线搜书") {
                 activeSheet = .onlineSearch
-            } label: {
-                Label("搜索在线书", systemImage: "antenna.radiowaves.left.and.right")
             }
             .disabled(!sources.hasEnabledSource)
             .help(sources.hasEnabledSource
                   ? "在启用的在线书源里搜索"
                   : OnlineCopy.noSources)
-
-            Button {
-                activeSheet = .sourceManagement
-            } label: {
-                Image(systemName: "slider.horizontal.3")
-            }
-            .help("书源管理")
 
             Picker("排序", selection: $sort) {
                 ForEach(LibrarySort.allCases) { s in
@@ -132,33 +124,31 @@ struct LibraryView: View {
                 .frame(width: 120)
                 .help("封面大小")
 
-            Button {
-                toggleServer()
+            // 次级操作收进「更多」菜单，避免首行按钮堆砌。
+            Menu {
+                Button("书源管理") { activeSheet = .sourceManagement }
+                Divider()
+                Button(serverURL == nil ? "共享书库" : "停止共享书库") { toggleServer() }
+                if let url = serverURL {
+                    Button("复制共享地址") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(url, forType: .string)
+                    }
+                }
+                Divider()
+                Button("重新扫描书库") { library.rescan() }
+                    .disabled(library.isScanning)
+                Button("更换书库文件夹") { library.promptForFolder() }
             } label: {
-                Image(systemName: serverURL == nil ? "wifi" : "wifi.circle.fill")
-                    .foregroundStyle(serverURL == nil ? Color.primary : Color.accentColor)
+                Image(systemName: "ellipsis.circle")
             }
-            .help(serverURL == nil
-                  ? "在本机网络上共享书库"
-                  : "正在共享：\(serverURL!) — 点击停止")
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("更多操作")
             .popover(isPresented: $showingServerInfo) {
                 serverInfoPopover
             }
-
-            Button {
-                library.rescan()
-            } label: {
-                Image(systemName: "arrow.clockwise")
-            }
-            .help("重新扫描书库")
-            .disabled(library.isScanning)
-
-            Button {
-                library.promptForFolder()
-            } label: {
-                Image(systemName: "folder")
-            }
-            .help("更换书库文件夹")
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 12)
@@ -188,7 +178,7 @@ struct LibraryView: View {
     }
 
     private var columns: [GridItem] {
-        [GridItem(.adaptive(minimum: cardSize, maximum: cardSize * 1.4), spacing: 24)]
+        [GridItem(.adaptive(minimum: CGFloat(cardSize), maximum: CGFloat(cardSize) * 1.4), spacing: 24)]
     }
 
     private func grid(items: [ComicItem]) -> some View {
@@ -199,7 +189,7 @@ struct LibraryView: View {
                 }
                 LazyVGrid(columns: columns, alignment: .leading, spacing: 28) {
                     ForEach(items) { item in
-                        LibraryCard(item: item, width: cardSize)
+                        LibraryCard(item: item, width: CGFloat(cardSize))
                             .onTapGesture(count: 2) { open(item) }
                             .contextMenu { contextMenu(for: item) }
                     }

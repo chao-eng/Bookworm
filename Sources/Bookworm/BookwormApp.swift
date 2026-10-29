@@ -103,6 +103,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 struct BookwormApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    // 观察悬浮窗状态：菜单栏里的「迷你模式」勾选要随模式实时刷新，
+    // 否则 Commands 树不会因外部单例的状态变化而重建。
+    @StateObject private var floatingPanel = FloatingPanelController.shared
 
     init() {
         // Only force `.regular` when launched as a plain executable (e.g.
@@ -222,7 +225,10 @@ struct BookwormApp: App {
                 Button("上一章") { ReadingSession.shared.prevChapter() }
                 Divider()
                 Button("自动翻页") { FloatingPanelController.shared.toggleAutoPage() }
-                Button("迷你模式") { FloatingPanelController.shared.toggleMini() }
+                Toggle("迷你模式", isOn: Binding(
+                    get: { floatingPanel.state.mode == .mini },
+                    set: { floatingPanel.show(mode: $0 ? .mini : .normal) }
+                ))
                 Divider()
                 Button("设置") { FloatingSettingsWindow.shared.show() }
             }

@@ -19,9 +19,13 @@ struct FloatingSettingsView: View {
         VStack(alignment: .leading, spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
+                    modeSection
+                    Divider()
                     hotkeySection
                     Divider()
                     appearanceSection
+                    Divider()
+                    interactionSection
                     Divider()
                     autoPageSection
                 }
@@ -41,12 +45,32 @@ struct FloatingSettingsView: View {
             }
             .padding(14)
         }
-        .frame(minWidth: 440, minHeight: 460)
+        .frame(minWidth: 460, minHeight: 560)
         .onAppear {
             fontColorHex = model.state.fontColor ?? ""
             backgroundColorHex = model.state.backgroundColor ?? ""
         }
         .onDisappear { stopRecording() }
+    }
+
+    // MARK: - 显示模式
+
+    private var modeSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("显示模式").font(.headline)
+            Picker("", selection: Binding(
+                get: { model.state.mode == .mini ? FloatingState.Mode.mini : .normal },
+                set: { model.show(mode: $0) }
+            )) {
+                Text("默认模式").tag(FloatingState.Mode.normal)
+                Text("迷你模式").tag(FloatingState.Mode.mini)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            Text("默认模式显示完整正文；迷你模式缩成一条紧凑文字条。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
     }
 
     // MARK: - 快捷键
@@ -135,6 +159,11 @@ struct FloatingSettingsView: View {
                      hex: $backgroundColorHex,
                      preview: Color(hexRGB: model.state.backgroundColor) ?? Color(nsColor: .windowBackgroundColor),
                      apply: { model.setBackgroundColor($0) })
+            Toggle("迷你模式显示百分比进度", isOn: Binding(
+                get: { model.state.showMiniPercent },
+                set: { model.setShowMiniPercent($0) }
+            ))
+            .toggleStyle(.switch)
         }
     }
 
@@ -192,6 +221,44 @@ struct FloatingSettingsView: View {
                 guard let color else { return }
                 hex.wrappedValue = Color(nsColor: color).hexRGBString
             }
+        }
+    }
+
+    // MARK: - 鼠标与快速隐藏
+
+    private var interactionSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("鼠标翻页").font(.headline)
+            Picker("", selection: Binding(
+                get: { model.state.mousePageTurn },
+                set: { model.setMousePageTurn($0) }
+            )) {
+                ForEach(FloatingState.MousePageTurn.allCases, id: \.self) { mode in
+                    Text(mode.title).tag(mode)
+                }
+            }
+            .pickerStyle(.radioGroup)
+            .labelsHidden()
+            Text("启用右键翻页后，按住 ⌥、⌃ 或 ⌘ 再右键可打开菜单；顶部按钮栏始终可点。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Divider()
+
+            Text("快速隐藏").font(.headline)
+            Picker("", selection: Binding(
+                get: { model.state.quickHide },
+                set: { model.setQuickHideMode($0) }
+            )) {
+                ForEach(FloatingState.QuickHide.allCases, id: \.self) { mode in
+                    Text(mode.title).tag(mode)
+                }
+            }
+            .pickerStyle(.radioGroup)
+            .labelsHidden()
+            Text("鼠标移出窗口时生效；标注「移回重新显示」的选项在鼠标回到窗口位置时恢复。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -277,7 +344,7 @@ final class FloatingSettingsWindow {
             return
         }
         let hosting = NSHostingController(rootView: FloatingSettingsView())
-        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 560),
+        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 660),
                          styleMask: [.titled, .closable, .resizable],
                          backing: .buffered,
                          defer: false)

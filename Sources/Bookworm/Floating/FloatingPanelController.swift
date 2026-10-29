@@ -123,7 +123,15 @@ final class FloatingPanelController: NSObject, ObservableObject {
     }
 
     func toggle() {
-        if isPanelVisible { hide() } else { show() }
+        // 快速隐藏后缩成小图标时窗口仍在屏幕上，也算「显示中」：
+        // 此时再按一次应当把图标彻底隐藏，而不是还原成完整悬浮窗。
+        let iconHidden = quickHidden
+            && (state.quickHide == .shrinkIcon || state.quickHide == .shrinkIconDoubleClick)
+        if isPanelVisible || iconHidden {
+            hide()
+        } else {
+            show()
+        }
     }
 
     func show(mode: FloatingState.Mode? = nil) {

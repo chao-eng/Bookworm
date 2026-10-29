@@ -324,6 +324,10 @@ private final class RelayStreamer: NSObject, URLSessionDataDelegate {
         responded = true
         var head = "HTTP/1.1 200 OK\r\n"
         head += "Content-Type: \(http.value(forHTTPHeaderField: "Content-Type") ?? "application/octet-stream")\r\n"
+        // Sparkle 用响应里的 filename 命名下载的临时文件，再按扩展名选解压器；
+        // 转发地址最后一段是 /fetch，不透传原文件名会被当成无扩展名文件导致解压失败。
+        let filename = RelayStreamer.safeFilename(from: url)
+        head += "Content-Disposition: attachment; filename=\"\(filename)\"\r\n"
         // 上游若压缩过，长度是压缩后的，不能直接透传，改用连接关闭界定响应体。
         if http.value(forHTTPHeaderField: "Content-Encoding") == nil, http.expectedContentLength >= 0 {
             head += "Content-Length: \(http.expectedContentLength)\r\n"
@@ -331,6 +335,13 @@ private final class RelayStreamer: NSObject, URLSessionDataDelegate {
         head += "Cache-Control: no-store\r\nConnection: close\r\n\r\n"
         connection.send(content: Data(head.utf8), completion: .contentProcessed { _ in })
         completionHandler(.allow)
+    }
+
+    /// 取被转发资源本身的文件名（如 Bookworm-0.1.2.dmg），保证 Sparkle 落盘后扩展名正确。
+    private static func safeFilename(from url: URL) -> String {
+        let name = url.lastPathComponent.removingPercentEncoding ?? url.lastPathComponent
+        guard !name.isEmpty, !name.contains("/") else { return "Bookworm-update.dmg" }
+        return name.replacingOccurrences(of: "\"", with: "")
     }
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {

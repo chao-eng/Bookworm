@@ -120,7 +120,7 @@ final class ReaderModel: ObservableObject {
     @Published var zoomMode: ZoomMode = .fitPage {
         didSet { if zoomMode != oldValue, !isRestoring { saveSubject.send(()) } }
     }
-    @Published var backgroundDark: Bool = true
+    @Published var backgroundDark: Bool = false
     @Published var loadError: String?
     @Published var isLoading: Bool = true
     @Published var loadingStatus: String = "正在打开书籍…"

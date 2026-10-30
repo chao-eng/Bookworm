@@ -19,7 +19,7 @@ struct OnboardingView: View {
                 Text("把书架放进桌面一角，把故事留给自己。")
                     .font(.system(size: 17, weight: .regular, design: .serif))
                     .italic()
-                    .foregroundStyle(Color.white.opacity(0.78))
+                    .foregroundStyle(Color.primary.opacity(0.62))
                     .multilineTextAlignment(.center)
 
                 Spacer(minLength: 36)
@@ -29,15 +29,13 @@ struct OnboardingView: View {
                 } label: {
                     Text("选择书库文件夹")
                         .font(.system(size: 16, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(Color(red: 0.04, green: 0.06, blue: 0.14))
+                        .foregroundStyle(Color.white)
                         .padding(.horizontal, 44)
                         .padding(.vertical, 16)
                         .background(
                             Capsule()
-                                .fill(Color.white)
-                                .shadow(color: Color(red: 0.55, green: 0.78, blue: 1.0).opacity(0.55),
-                                        radius: 30, x: 0, y: 0)
-                                .shadow(color: Color.white.opacity(0.22), radius: 12, x: 0, y: 0)
+                                .fill(Color(red: 0.07, green: 0.08, blue: 0.12))
+                                .shadow(color: Color.black.opacity(0.18), radius: 18, x: 0, y: 8)
                         )
                 }
                 .buttonStyle(.plain)
@@ -55,25 +53,24 @@ struct BookwormBackground: View {
         ZStack {
             LinearGradient(
                 stops: [
-                    .init(color: Color(red: 0.040, green: 0.075, blue: 0.180), location: 0.0),
-                    .init(color: Color(red: 0.020, green: 0.040, blue: 0.110), location: 0.55),
-                    .init(color: Color(red: 0.005, green: 0.015, blue: 0.060), location: 1.0),
+                    .init(color: Color.white, location: 0.0),
+                    .init(color: Color(red: 0.972, green: 0.973, blue: 0.980), location: 0.55),
+                    .init(color: Color(red: 0.957, green: 0.961, blue: 0.973), location: 1.0),
                 ],
                 startPoint: .top,
                 endPoint: .bottom
             )
 
-            // Subtle radial vignette/highlight near top-center
+            // 左下角极淡的粉紫光，呼应参考图侧边栏的暖色晕染
             RadialGradient(
                 colors: [
-                    Color(red: 0.15, green: 0.28, blue: 0.55).opacity(0.30),
+                    Color(red: 0.969, green: 0.910, blue: 0.933).opacity(0.35),
                     Color.clear
                 ],
-                center: UnitPoint(x: 0.5, y: 0.18),
+                center: UnitPoint(x: 0.12, y: 0.95),
                 startRadius: 0,
-                endRadius: 520
+                endRadius: 620
             )
-            .blendMode(.screen)
         }
     }
 }

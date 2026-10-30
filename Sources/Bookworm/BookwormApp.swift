@@ -129,13 +129,12 @@ struct BookwormApp: App {
                 // tagline and pill CTA all fit at once without the user
                 // having to manually resize the window.
                 .frame(minWidth: 760, minHeight: 780)
-                .preferredColorScheme(.dark)
+                .preferredColorScheme(.light)
                 .onAppear {
                     NSApp.activate(ignoringOtherApps: true)
                 }
         }
-        .windowStyle(.titleBar)
-        .windowToolbarStyle(.unified(showsTitle: true))
+        .windowStyle(.hiddenTitleBar)
         // First-open size — wide enough for the library grid later, tall
         // enough for the welcome screen on first launch. Subsequent opens
         // use whatever frame macOS remembered for the window.

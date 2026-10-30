@@ -192,6 +192,6 @@ final class EbookSettings: ObservableObject {
         let saved = d.double(forKey: Keys.lineSpacing)
         self.lineSpacing = saved >= EbookSettings.minLineSpacing
             && saved <= EbookSettings.maxLineSpacing ? saved : 1.6
-        self.theme = EbookTheme(rawValue: d.string(forKey: Keys.theme) ?? "") ?? .dark
+        self.theme = EbookTheme(rawValue: d.string(forKey: Keys.theme) ?? "") ?? .light
     }
 }

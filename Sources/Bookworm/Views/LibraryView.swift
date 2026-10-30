@@ -8,6 +8,140 @@ enum LibrarySort: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+/// 侧边栏分类筛选。
+enum LibraryFilter: String, CaseIterable, Identifiable {
+    case all = "全部"
+    case inProgress = "继续阅读"
+    case unread = "未读"
+    case finished = "已读完"
+    case ebooks = "电子书"
+    case comics = "漫画"
+    case pdf = "PDF"
+    case online = "在线书籍"
+
+    var id: String { rawValue }
+
+    var systemImage: String {
+        switch self {
+        case .all:        return "books.vertical"
+        case .inProgress: return "clock.arrow.circlepath"
+        case .unread:     return "circle"
+        case .finished:   return "checkmark.circle"
+        case .ebooks:     return "book.closed"
+        case .comics:     return "photo.on.rectangle.angled"
+        case .pdf:        return "doc.richtext"
+        case .online:     return "globe"
+        }
+    }
+}
+
+/// 书架统一的浅色主题取值，避免颜色散落在各视图里。
+private enum LibraryPalette {
+    static let content = Color.white
+    static let hairline = Color.black.opacity(0.10)
+    static let divider = Color.black.opacity(0.12)
+    static let cardBorder = Color.black.opacity(0.10)
+    static let sidebarTop = Color(red: 0.949, green: 0.953, blue: 0.965)
+    static let sidebarBottom = Color(red: 0.929, green: 0.933, blue: 0.953)
+    static let sidebarWarm = Color(red: 0.965, green: 0.914, blue: 0.937)
+}
+
+/// 是否有阅读进度：在线书看百分比，本地书看已读到第几页。
+private func hasReadingProgress(_ item: ComicItem) -> Bool {
+    item.isOnline ? (item.bookPercent ?? 0) > 0 : item.lastReadPage > 0
+}
+
+/// 侧边栏毛玻璃背景，让窗口背后的桌面透出淡淡一层。
+private struct SidebarVisualEffect: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.material = .sidebar
+        view.blendingMode = .behindWindow
+        view.state = .active
+        return view
+    }
+
+    func updateNSView(_ view: NSVisualEffectView, context: Context) {}
+}
+
+/// 侧边栏行：图标 + 文字，选中高亮，悬停淡灰底。
+private struct SidebarRow: View {
+    let title: String
+    let systemImage: String
+    var isSelected: Bool = false
+    var isDisabled: Bool = false
+    var helpText: String? = nil
+    let action: () -> Void
+
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 13))
+                    .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                    .frame(width: 18)
+                Text(title)
+                    .font(.system(size: 13))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .foregroundStyle(isSelected ? Color.primary : Color.primary.opacity(0.85))
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 30)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(isSelected
+                          ? Color.accentColor.opacity(0.16)
+                          : (hovering && !isDisabled ? Color.black.opacity(0.04) : Color.clear))
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(isDisabled)
+        .opacity(isDisabled ? 0.45 : 1)
+        .onHover { hovering = $0 }
+        .help(helpText ?? title)
+    }
+}
+
+/// 「…」popover 里的操作项，保持与侧边栏一致的轻量样式。
+private struct MoreMenuItem: View {
+    let title: String
+    let systemImage: String
+    var isDisabled: Bool = false
+    let action: () -> Void
+
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 16)
+                Text(title)
+                    .font(.system(size: 12.5))
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 8)
+            .frame(height: 26)
+            .background(
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(hovering && !isDisabled ? Color.black.opacity(0.05) : Color.clear)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(isDisabled)
+        .opacity(isDisabled ? 0.45 : 1)
+        .onHover { hovering = $0 }
+    }
+}
+
 private enum LibrarySheet: String, Identifiable {
     case onlineSearch
     case sourceManagement
@@ -28,11 +162,16 @@ struct LibraryView: View {
     @State private var orderCache = LibraryOrderCache()
     /// 搜索面板与书源管理互斥，统一由一个枚举驱动。
     @State private var activeSheet: LibrarySheet?
+    @State private var filter: LibraryFilter = .all
+    @State private var showingMoreMenu = false
 
     /// 排序后的条目。缓存里只存 id 顺序，这里再按 id 取 `library.items`
     /// 的最新值，保证阅读进度、封面等字段不会过期。
     private func visibleItems() -> [ComicItem] {
-        let ids = orderCache.sortedIDs(items: library.items, search: search, sort: sort)
+        let ids = orderCache.sortedIDs(items: library.items,
+                                       search: search,
+                                       sort: sort,
+                                       filter: filter)
         var byID = [ComicItem.ID: ComicItem](minimumCapacity: library.items.count)
         for item in library.items { byID[item.id] = item }
         return ids.compactMap { byID[$0] }
@@ -40,28 +179,16 @@ struct LibraryView: View {
 
     var body: some View {
         let visible = visibleItems()
-        VStack(spacing: 0) {
-            header
-            Divider()
-            if visible.isEmpty {
-                emptyState
-            } else {
-                grid(items: visible)
-            }
-            if library.isScanning {
-                Divider()
-                HStack(spacing: 10) {
-                    ProgressView().controlSize(.small)
-                    Text(library.scanProgress)
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                }
-                .padding(.horizontal, 20)
-                .padding(.vertical, 8)
-                .background(.bar)
-            }
+        HStack(spacing: 0) {
+            sidebar
+                .frame(width: 232)
+            Rectangle()
+                .fill(LibraryPalette.hairline)
+                .frame(width: 1)
+            content(visible: visible)
         }
+        // 隐藏标题栏后内容延伸到红绿灯区域，顶部留白由各区域自行控制。
+        .ignoresSafeArea(edges: .top)
         .frame(minWidth: 800, minHeight: 500)
         .sheet(item: $activeSheet) { sheet in
             switch sheet {
@@ -82,76 +209,244 @@ struct LibraryView: View {
         }
     }
 
-    private var header: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "books.vertical.fill")
-                .foregroundStyle(.tint)
-            Text("书库")
-                .font(.title2.bold())
+    // MARK: - 侧边栏
 
-            if let folder = library.rootFolder {
-                Text(folder.path)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .help(folder.path)
+    private var sidebar: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // 隐藏标题栏后窗口红绿灯覆盖在侧边栏顶部，搜索框下移避让。
+            searchField
+                .padding(.horizontal, 14)
+                .padding(.top, 38)
+                .padding(.bottom, 6)
+
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 0) {
+                    sectionHeader("Bookworm")
+                    SidebarRow(title: "在线搜书",
+                               systemImage: "magnifyingglass.circle",
+                               isDisabled: !sources.hasEnabledSource,
+                               helpText: sources.hasEnabledSource
+                                     ? "在启用的在线书源里搜索"
+                                     : OnlineCopy.noSources) {
+                        activeSheet = .onlineSearch
+                    }
+                    SidebarRow(title: "书源管理",
+                               systemImage: "square.stack.3d.up") {
+                        activeSheet = .sourceManagement
+                    }
+
+                    sectionHeader("书库")
+                    ForEach(LibraryFilter.allCases) { item in
+                        SidebarRow(title: item.rawValue,
+                                   systemImage: item.systemImage,
+                                   isSelected: filter == item) { filter = item }
+                    }
+
+                    sectionHeader("书库位置")
+                    folderRow
+                    SidebarRow(title: "更换书库文件夹",
+                               systemImage: "folder") { library.promptForFolder() }
+                    SidebarRow(title: "重新扫描书库",
+                               systemImage: "arrow.clockwise",
+                               isDisabled: library.isScanning) { library.rescan() }
+                }
+                .padding(.horizontal, 8)
+                .padding(.bottom, 16)
             }
+        }
+        .background {
+            SidebarVisualEffect()
+                .overlay {
+                    ZStack {
+                        LinearGradient(colors: [LibraryPalette.sidebarTop,
+                                                LibraryPalette.sidebarBottom],
+                                       startPoint: .top, endPoint: .bottom)
+                        RadialGradient(colors: [LibraryPalette.sidebarWarm.opacity(0.45), .clear],
+                                       center: UnitPoint(x: 0.05, y: 1.0),
+                                       startRadius: 0,
+                                       endRadius: 420)
+                    }
+                    .allowsHitTesting(false)
+                }
+                .ignoresSafeArea()
+        }
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+            TextField("搜索", text: $search)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12.5))
+        }
+        .padding(.horizontal, 8)
+        .frame(height: 26)
+        .background(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(Color.white.opacity(0.55))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .strokeBorder(Color.black.opacity(0.06), lineWidth: 1)
+        )
+    }
+
+    private func sectionHeader(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 10)
+            .padding(.top, 14)
+            .padding(.bottom, 4)
+    }
+
+    private var folderRow: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "externaldrive")
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+                .frame(width: 18)
+            Text(library.rootFolder?.lastPathComponent ?? "未选择书库")
+                .font(.system(size: 13))
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .foregroundStyle(.primary.opacity(0.85))
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 30)
+        .help(library.rootFolder?.path ?? "未选择书库文件夹")
+    }
+
+    // MARK: - 内容区
+
+    private func content(visible: [ComicItem]) -> some View {
+        VStack(spacing: 0) {
+            titleRow
+            Rectangle()
+                .fill(LibraryPalette.divider)
+                .frame(height: 1)
+                .padding(.horizontal, 24)
+
+            if visible.isEmpty {
+                emptyState
+            } else {
+                grid(items: visible)
+            }
+
+            if library.isScanning {
+                Divider()
+                HStack(spacing: 10) {
+                    ProgressView().controlSize(.small)
+                    Text(library.scanProgress)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+                .padding(.horizontal, 24)
+                .padding(.vertical, 8)
+            }
+
+            Text("\(visible.count) 本书")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+        }
+        .background(LibraryPalette.content)
+    }
+
+    private var titleRow: some View {
+        HStack(spacing: 12) {
+            Text(filter.rawValue)
+                .font(.system(size: 30, weight: .bold))
 
             Spacer()
 
-            TextField("搜索…", text: $search)
-                .textFieldStyle(.roundedBorder)
-                .frame(width: 180)
-
-            Button("在线搜书") {
-                activeSheet = .onlineSearch
-            }
-            .disabled(!sources.hasEnabledSource)
-            .help(sources.hasEnabledSource
-                  ? "在启用的在线书源里搜索"
-                  : OnlineCopy.noSources)
-
-            Picker("排序", selection: $sort) {
-                ForEach(LibrarySort.allCases) { s in
-                    Text(s.rawValue).tag(s)
-                }
-            }
-            .pickerStyle(.menu)
-            .frame(width: 170)
-
-            Slider(value: $cardSize, in: 120...280)
-                .frame(width: 120)
-                .help("封面大小")
-
-            // 次级操作收进「更多」菜单，避免首行按钮堆砌。
-            Menu {
-                Button("书源管理") { activeSheet = .sourceManagement }
-                Divider()
-                Button(serverURL == nil ? "共享书库" : "停止共享书库") { toggleServer() }
-                if let url = serverURL {
-                    Button("复制共享地址") {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(url, forType: .string)
+            // 「继续阅读」始终按最近阅读排序，排序选项在此分类下无效，直接隐藏避免误导。
+            if filter != .inProgress {
+                Picker("排序", selection: $sort) {
+                    ForEach(LibrarySort.allCases) { s in
+                        Text(s.rawValue).tag(s)
                     }
                 }
-                Divider()
-                Button("重新扫描书库") { library.rescan() }
-                    .disabled(library.isScanning)
-                Button("更换书库文件夹") { library.promptForFolder() }
-            } label: {
-                Image(systemName: "ellipsis.circle")
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .frame(width: 120)
             }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
+
+            HStack(spacing: 6) {
+                Image(systemName: "square.resize")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Slider(value: $cardSize, in: 120...280)
+                    .frame(width: 100)
+            }
+            .help("封面大小")
+
+            Button {
+                showingMoreMenu = true
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 28, height: 28)
+                    .background(Circle().fill(LibraryPalette.content))
+                    .overlay(Circle().strokeBorder(LibraryPalette.hairline, lineWidth: 1))
+            }
+            .buttonStyle(.plain)
             .help("更多操作")
-            .popover(isPresented: $showingServerInfo) {
-                serverInfoPopover
+            .popover(isPresented: $showingMoreMenu, arrowEdge: .bottom) {
+                moreMenu
             }
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 12)
+        .padding(.horizontal, 24)
+        .padding(.top, 26)
+        .padding(.bottom, 16)
+    }
+
+    private var moreMenu: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                MoreMenuItem(title: "书源管理", systemImage: "square.stack.3d.up") {
+                    showingMoreMenu = false
+                    activeSheet = .sourceManagement
+                }
+                MoreMenuItem(title: serverURL == nil ? "共享书库" : "停止共享书库",
+                             systemImage: "wifi") {
+                    toggleServer()
+                }
+                if serverURL != nil {
+                    MoreMenuItem(title: "复制共享地址", systemImage: "doc.on.doc") {
+                        copyServerURL()
+                    }
+                }
+            }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 2) {
+                MoreMenuItem(title: "重新扫描书库",
+                             systemImage: "arrow.clockwise",
+                             isDisabled: library.isScanning) {
+                    showingMoreMenu = false
+                    library.rescan()
+                }
+                MoreMenuItem(title: "更换书库文件夹", systemImage: "folder") {
+                    showingMoreMenu = false
+                    library.promptForFolder()
+                }
+            }
+
+            if showingServerInfo, let url = serverURL {
+                Divider()
+                serverInfoContent(url: url)
+            }
+        }
+        .padding(16)
+        .frame(width: 280)
     }
 
     private var emptyState: some View {
@@ -163,14 +458,18 @@ struct LibraryView: View {
             if library.isScanning {
                 Text("正在扫描书库…")
                     .foregroundStyle(.secondary)
-            } else if search.isEmpty {
-                Text("此文件夹中没有找到漫画。")
+            } else if !search.isEmpty {
+                Text("没有与“\(search)”匹配的书籍。")
+                    .foregroundStyle(.secondary)
+            } else if filter != .all {
+                // 书库里有书、只是当前分类为空，此时不应引导用户更换文件夹。
+                Text("“\(filter.rawValue)”分类下还没有书籍。")
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("此文件夹中没有找到书籍。")
                     .foregroundStyle(.secondary)
                 Button("选择其他文件夹") { library.promptForFolder() }
                     .buttonStyle(.borderedProminent)
-            } else {
-                Text("没有与“\(search)”匹配的漫画。")
-                    .foregroundStyle(.secondary)
             }
             Spacer()
         }
@@ -178,55 +477,30 @@ struct LibraryView: View {
     }
 
     private var columns: [GridItem] {
-        [GridItem(.adaptive(minimum: CGFloat(cardSize), maximum: CGFloat(cardSize) * 1.4), spacing: 24)]
+        // 列宽固定为封面宽度：列宽一旦大于卡片，卡片左对齐后会在每列右侧多出空白，视觉上就像书间距被放大。
+        [GridItem(.adaptive(minimum: CGFloat(cardSize), maximum: CGFloat(cardSize)), spacing: 28)]
     }
 
     private func grid(items: [ComicItem]) -> some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 28) {
-                if search.isEmpty, !library.inProgress.isEmpty {
-                    continueReadingShelf
-                }
-                LazyVGrid(columns: columns, alignment: .leading, spacing: 28) {
-                    ForEach(items) { item in
-                        LibraryCard(item: item, width: CGFloat(cardSize))
-                            .onTapGesture(count: 2) { open(item) }
-                            .contextMenu { contextMenu(for: item) }
+            LazyVGrid(columns: columns, alignment: .leading, spacing: 24) {
+                ForEach(items) { item in
+                    LibraryCard(item: item, width: CGFloat(cardSize)) {
+                        menuItems(for: item)
                     }
+                    .onTapGesture(count: 2) { open(item) }
+                    .contextMenu { menuItems(for: item) }
                 }
             }
-            .padding(24)
-        }
-        .background(BookwormBackground())
-    }
-
-    /// Horizontal shelf of in-progress books, newest activity first.
-    /// Only shown when not searching — it's a "jump back in" affordance,
-    /// not a search result.
-    private var continueReadingShelf: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 8) {
-                Image(systemName: "bookmark.fill")
-                    .foregroundStyle(.tint)
-                Text("继续阅读")
-                    .font(.title3.bold())
-            }
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(alignment: .top, spacing: 18) {
-                    ForEach(library.inProgress.prefix(15)) { item in
-                        LibraryCard(item: item, width: 132)
-                            .onTapGesture(count: 2) { open(item) }
-                            .contextMenu { contextMenu(for: item) }
-                    }
-                }
-                .padding(.bottom, 4)
-            }
-            Divider()
+            .padding(.horizontal, 24)
+            .padding(.top, 20)
+            .padding(.bottom, 16)
         }
     }
 
+    /// 右键菜单与卡片右下角「•••」共用同一份菜单项。
     @ViewBuilder
-    private func contextMenu(for item: ComicItem) -> some View {
+    private func menuItems(for item: ComicItem) -> some View {
         Button("打开") { open(item) }
         if item.isOnline {
             if let name = SourceRepository.shared.source(id: item.sourceID ?? "")?.name {
@@ -368,96 +642,104 @@ struct LibraryView: View {
         }
     }
 
+    private func copyServerURL() {
+        guard let url = serverURL else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(url, forType: .string)
+    }
+
     @ViewBuilder
-    private var serverInfoPopover: some View {
+    private func serverInfoContent(url: String) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 Image(systemName: "wifi.circle.fill").foregroundStyle(.tint)
                 Text("局域网共享").font(.headline)
             }
-            if let url = serverURL {
-                Text("在 Wi-Fi 内任意设备的浏览器中打开此网址：")
-                    .font(.callout).foregroundStyle(.secondary)
-                HStack {
-                    Text(url).font(.title3.monospaced())
-                    Button {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(url, forType: .string)
-                    } label: { Image(systemName: "doc.on.doc") }
-                    .buttonStyle(.borderless)
-                    .focusEffectDisabled()
-                    .help("复制")
-                }
+            Text("在 Wi-Fi 内任意设备的浏览器中打开此网址：")
+                .font(.callout).foregroundStyle(.secondary)
+            HStack {
+                Text(url).font(.callout.monospaced())
+                    .textSelection(.enabled)
+                Button {
+                    copyServerURL()
+                } label: { Image(systemName: "doc.on.doc") }
+                .buttonStyle(.borderless)
+                .focusEffectDisabled()
+                .help("复制")
             }
             Text("仅共享图像类书籍（漫画 / 日漫 / PDF），电子书请留在应用内阅读。无密码保护——同一网络中的任何人都可访问。")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            Button("停止共享") { toggleServer() }
-                .keyboardShortcut(.cancelAction)
         }
-        .padding(16)
-        .frame(width: 320)
     }
 }
 
-struct LibraryCard: View {
+struct LibraryCard<MenuContent: View>: View {
     let item: ComicItem
     let width: CGFloat
+    let menuContent: MenuContent
     @EnvironmentObject var library: LibraryStore
     @State private var thumbnail: NSImage?
     /// 当前已加载 / 正在加载的缩略图文件名，用于避免重复解码。
     @State private var thumbnailKey: String?
     @State private var loadTask: Task<Void, Never>?
 
+    init(item: ComicItem, width: CGFloat, @ViewBuilder menuContent: () -> MenuContent) {
+        self.item = item
+        self.width = width
+        self.menuContent = menuContent()
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ZStack(alignment: .bottomTrailing) {
-                ZStack {
-                    Rectangle().fill(Color.gray.opacity(0.18))
-                    if let thumb = thumbnail {
-                        Image(nsImage: thumb)
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                    } else {
-                        // 没有封面时把书名放在封面中心，避免只留一个空框。
-                        Text(item.title)
-                            .font(.callout.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
-                            .lineLimit(4)
-                            .padding(12)
-                    }
+            ZStack {
+                Rectangle().fill(Color.gray.opacity(0.12))
+                if let thumb = thumbnail {
+                    Image(nsImage: thumb)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                } else {
+                    // 没有封面时把书名放在封面中心，避免只留一个空框。
+                    Text(item.title)
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .lineLimit(4)
+                        .padding(12)
                 }
-                .frame(width: width, height: width * 1.45)
-                .clipped()
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                .overlay(alignment: .bottom) { progressBar }
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .strokeBorder(Color.black.opacity(0.12), lineWidth: 1)
-                )
-                .shadow(color: .black.opacity(0.25), radius: 8, y: 4)
-                .overlay(alignment: .topLeading) { progressBadge }
-
-                Text(item.format.displayName)
-                    .font(.caption2.bold())
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(.black.opacity(0.65))
-                    .foregroundStyle(.white)
-                    .clipShape(Capsule())
-                    .padding(6)
             }
-            .overlay(alignment: .topTrailing) { onlineBadges }
+            .frame(width: width, height: width * 1.45)
+            .clipped()
+            .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .strokeBorder(LibraryPalette.cardBorder, lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.12), radius: 10, y: 5)
 
-            // 封面下方只保留阅读进度，书名与页数不再显示；
-            // 固定行高让每张卡片高度一致，网格不会因文字换行而错位。
-            Text(progressLabel)
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(item.isFinished ? Color.green : .secondary)
-                .lineLimit(1)
-                .frame(width: width, height: 16, alignment: .leading)
-                .help(item.title)
+            // 参考图样式：封面下方只保留进度文字与「•••」菜单，固定行高保证网格不错位。
+            HStack(spacing: 0) {
+                Text(progressLabel)
+                    .font(.system(size: 11, design: .default).monospacedDigit())
+                    .foregroundStyle(item.isFinished ? Color.green : .secondary)
+                    .lineLimit(1)
+                    .help(item.title)
+                Spacer(minLength: 0)
+                Menu {
+                    menuContent
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 18, height: 14)
+                        .contentShape(Rectangle())
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("更多操作")
+            }
+            .frame(width: width, height: 16)
         }
         .contentShape(Rectangle())
         .onAppear(perform: loadThumbnail)
@@ -468,85 +750,13 @@ struct LibraryCard: View {
         }
     }
 
-    /// 底部进度文案：已读完 / 已读百分比 / 未读。
+    /// 底部进度文案：已读完 / 百分比 / 未读。
     private var progressLabel: String {
         if item.isFinished { return "已读完" }
-        if let frac = item.progressFraction, hasProgress {
-            return "已读 \(Int((frac * 100).rounded()))%"
+        if let frac = item.progressFraction, hasReadingProgress(item) {
+            return "\(Int((frac * 100).rounded()))%"
         }
         return "未读"
-    }
-
-    /// Corner badge: a green check once finished. 百分比已移到封面下方，
-    /// 这里不再重复显示。
-    @ViewBuilder
-    private var progressBadge: some View {
-        if item.isFinished {
-            Image(systemName: "checkmark")
-                .font(.caption2.bold())
-                .foregroundStyle(.white)
-                .padding(5)
-                .background(Color.green, in: Circle())
-                .padding(6)
-        }
-    }
-
-    private var hasProgress: Bool {
-        item.isOnline ? (item.bookPercent ?? 0) > 0 : item.lastReadPage > 0
-    }
-
-    /// 在线书左上/右上徽标：来源名与健康度状态点（07 §2）。
-    @ViewBuilder
-    private var onlineBadges: some View {
-        if item.isOnline {
-            HStack(spacing: 4) {
-                if let name = sourceName {
-                    Text(name.count > 8 ? String(name.prefix(8)) + "…" : name)
-                        .font(.caption2)
-                        .lineLimit(1)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(.black.opacity(0.65))
-                        .foregroundStyle(.white)
-                        .clipShape(Capsule())
-                }
-                if let health = sourceHealth, health < 0.3 {
-                    Circle()
-                        .fill(Color.orange)
-                        .frame(width: 8, height: 8)
-                        .help(OnlineCopy.sourceUnhealthy)
-                }
-            }
-            .padding(6)
-        }
-    }
-
-    private var sourceName: String? {
-        guard let sid = item.sourceID else { return nil }
-        return SourceRepository.shared.source(id: sid)?.name
-    }
-
-    private var sourceHealth: Double? {
-        guard let sid = item.sourceID else { return nil }
-        return SourceRepository.shared.source(id: sid)?.healthScore
-    }
-
-    /// Thin progress fill along the bottom edge of the cover, mirroring
-    /// the percentage badge for an at-a-glance scan down the grid.
-    @ViewBuilder
-    private var progressBar: some View {
-        if let frac = item.progressFraction, hasProgress {
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    Rectangle()
-                        .fill(.black.opacity(0.35))
-                    Rectangle()
-                        .fill(item.isFinished ? Color.green : Color.accentColor)
-                        .frame(width: geo.size.width * CGFloat(frac))
-                }
-            }
-            .frame(height: 4)
-        }
     }
 
     /// 缩略图优先命中共享内存缓存；未命中时在后台线程解码（ImageIO 立即解码），
@@ -593,6 +803,7 @@ private final class LibraryOrderCache {
     private struct Signature: Equatable {
         let search: String
         let sortRaw: String
+        let filterRaw: String
         let count: Int
         let hash: Int
     }
@@ -600,38 +811,80 @@ private final class LibraryOrderCache {
     private var signature: Signature?
     private var ids: [ComicItem.ID] = []
 
-    func sortedIDs(items: [ComicItem], search: String, sort: LibrarySort) -> [ComicItem.ID] {
-        let sig = Self.signature(items: items, search: search, sort: sort)
+    func sortedIDs(items: [ComicItem],
+                   search: String,
+                   sort: LibrarySort,
+                   filter: LibraryFilter) -> [ComicItem.ID] {
+        let sig = Self.signature(items: items, search: search, sort: sort, filter: filter)
         if sig == signature { return ids }
 
-        var base = items
+        var base = items.filter { matches($0, filter: filter) }
         if !search.isEmpty {
-            base = items.filter { $0.title.localizedCaseInsensitiveContains(search) }
+            base = base.filter { $0.title.localizedCaseInsensitiveContains(search) }
         }
-        switch sort {
-        case .title:
-            base.sort { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
-        case .dateAdded:
-            base.sort { $0.dateAdded > $1.dateAdded }
-        case .lastOpened:
+        switch filter {
+        case .inProgress:
+            // 「继续阅读」按最近阅读时间倒序，忽略顶部排序选项。
             base.sort { ($0.lastOpened ?? .distantPast) > ($1.lastOpened ?? .distantPast) }
+        default:
+            switch sort {
+            case .title:
+                base.sort { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+            case .dateAdded:
+                base.sort { $0.dateAdded > $1.dateAdded }
+            case .lastOpened:
+                base.sort { ($0.lastOpened ?? .distantPast) > ($1.lastOpened ?? .distantPast) }
+            }
         }
         ids = base.map(\.id)
         signature = sig
         return ids
     }
 
+    private func matches(_ item: ComicItem, filter: LibraryFilter) -> Bool {
+        switch filter {
+        case .all:
+            return true
+        case .inProgress:
+            return item.isInProgress
+        case .unread:
+            return !hasReadingProgress(item)
+        case .finished:
+            return item.isFinished
+        case .ebooks:
+            return item.format.isEbook && !item.isOnline
+        case .comics:
+            return item.format.isImageBased && item.format != .pdf
+        case .pdf:
+            return item.format == .pdf
+        case .online:
+            return item.isOnline
+        }
+    }
+
     /// 只把影响筛选和排序的字段算进签名：标题、日期、最近打开等；
     /// 进度、页数、封面之外的字段变化不会让缓存失效。
     private static func signature(items: [ComicItem],
                                   search: String,
-                                  sort: LibrarySort) -> Signature {
+                                  sort: LibrarySort,
+                                  filter: LibraryFilter) -> Signature {
         var hasher = Hasher()
         hasher.combine(search)
         hasher.combine(sort.rawValue)
+        hasher.combine(filter.rawValue)
         for item in items {
             hasher.combine(item.id)
             hasher.combine(item.title)
+            // 阅读状态类筛选依赖进度字段，必须计入签名，否则读完一本书后列表中不会移出。
+            if filter == .inProgress || filter == .unread || filter == .finished {
+                hasher.combine(item.lastReadPage)
+                hasher.combine(item.pageCount)
+                hasher.combine(item.bookPercent)
+            }
+            // 「继续阅读」强制按最近打开倒序，与实际 sort 取值无关，同样要计入签名。
+            if filter == .inProgress {
+                hasher.combine(item.lastOpened)
+            }
             switch sort {
             case .title:
                 break
@@ -643,6 +896,7 @@ private final class LibraryOrderCache {
         }
         return Signature(search: search,
                          sortRaw: sort.rawValue,
+                         filterRaw: filter.rawValue,
                          count: items.count,
                          hash: hasher.finalize())
     }

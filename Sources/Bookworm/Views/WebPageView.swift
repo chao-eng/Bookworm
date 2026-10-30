@@ -409,7 +409,7 @@ struct WebPageView: NSViewRepresentable {
         var lastAppliedStyle: ReadingStyle?
         /// 上一次设置的 pageZoom；避免每次 SwiftUI 更新都重设。
         var lastZoom: CGFloat?
-        var style: ReadingStyle = ReadingStyle(theme: .dark, font: .serif, lineSpacing: 1.6)
+        var style: ReadingStyle = ReadingStyle(theme: .light, font: .serif, lineSpacing: 1.6)
         /// 当前希望滚动到的锚点。
         var desiredAnchor: String?
         /// 当前希望在加载完成后滚到章末。

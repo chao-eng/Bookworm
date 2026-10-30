@@ -205,8 +205,8 @@ final class LibraryStore: ObservableObject {
 
     func promptForFolder() {
         let panel = NSOpenPanel()
-        panel.title = "选择漫画文件夹"
-        panel.message = "请选择存放漫画和日漫的文件夹，其中的子文件夹也会一并扫描。"
+        panel.title = "选择书籍文件夹"
+        panel.message = "请选择存放书籍的文件夹，其中的子文件夹也会一并扫描。"
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false

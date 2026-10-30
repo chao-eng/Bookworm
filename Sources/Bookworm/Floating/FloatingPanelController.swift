@@ -951,6 +951,8 @@ final class FloatingPanelController: NSObject, ObservableObject {
         loadingWatchdog = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 8_000_000_000)
             guard let self, !Task.isCancelled, ReadingSession.shared.isLoading else { return }
+            // 还有当前章正文可读时不收起：切章加载慢不应让悬浮窗凭空消失。
+            guard ReadingSession.shared.text.isEmpty else { return }
             self.hide()
             Diagnostics.log("floating", "章节加载超过 8s，自动收起悬浮窗")
         }
@@ -1265,7 +1267,7 @@ struct FloatingPanelView: View {
     private var content: some View {
         if !session.isActive {
             placeholder
-        } else if session.isLoading {
+        } else if session.isLoading, session.text.isEmpty {
             loading
         } else if let error = session.lastError, session.text.isEmpty {
             errorView(error)
@@ -1277,6 +1279,7 @@ struct FloatingPanelView: View {
         } else {
             // 用 TextKit 绘制正文：分页与渲染共用同一套排版，避免 SwiftUI Text
             // 的行高逐行偏大导致每页末行被截断成「…」（正文缺失）。
+            // 切章加载中保留当前章正文；失败时叠加一条带重试的错误提示。
             FloatingTextPage(text: model.pageText,
                              fontSize: CGFloat(model.state.fontSize),
                              color: fontColor)
@@ -1284,6 +1287,11 @@ struct FloatingPanelView: View {
                 .padding(.horizontal, 14)
                 .padding(.top, 30)
                 .padding(.bottom, 20)
+                .overlay(alignment: .bottom) {
+                    if let error = session.lastError {
+                        floatingErrorBanner(error)
+                    }
+                }
         }
     }
 
@@ -1326,6 +1334,29 @@ struct FloatingPanelView: View {
         }
         .padding(.horizontal, 20)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// 切章失败的紧凑重试条：正文保持当前章不动，条内提供重试。
+    private func floatingErrorBanner(_ message: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 10))
+                .foregroundStyle(.orange)
+            Text("这一章没加载出来")
+                .font(.system(size: 10, weight: .medium))
+            Text(message)
+                .font(.system(size: 9))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Button("重试") { model.retry() }
+                .controlSize(.mini)
+                .font(.system(size: 10))
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(Capsule().fill(.thinMaterial))
+        .padding(.bottom, 26)
     }
 
     /// 标题栏显示方式：不显示 / 常显 / 鼠标移出隐藏（悬停显示）。
@@ -1393,7 +1424,11 @@ struct FloatingPanelView: View {
 
     private var headerTitle: String {
         let title = session.bookTitle.isEmpty ? "未打开书籍" : session.bookTitle
-        return session.chapterTitle.isEmpty ? title : "\(title) · \(session.chapterTitle)"
+        var text = session.chapterTitle.isEmpty ? title : "\(title) · \(session.chapterTitle)"
+        if session.isLoading, !session.text.isEmpty {
+            text += " · 加载中…"
+        }
+        return text
     }
 
     private var pageLabel: String {
@@ -1405,7 +1440,8 @@ struct FloatingPanelView: View {
     /// 因此这里不再按首行截断，也不再使用省略号（BR-54）。
     private var miniText: String {
         guard session.isActive else { return "打开一本书" }
-        if session.isLoading { return "正在加载…" }
+        // 切章加载中正文仍是当前章，迷你条继续显示当前行。
+        if session.isLoading, session.text.isEmpty { return "正在加载…" }
         let text = model.pageText.trimmingCharacters(in: .whitespacesAndNewlines)
         return text.isEmpty ? "这一页没有内容" : text
     }

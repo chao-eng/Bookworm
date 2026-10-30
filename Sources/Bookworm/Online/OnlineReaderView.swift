@@ -308,7 +308,7 @@ private struct OnlineReaderHost: View {
                            message: error,
                            retry: { model.retry() })
             } else if session.isLoading, session.text.isEmpty {
-                ProgressView("正在加载第 \(session.chapterIndex + 1) 章…")
+                ProgressView("正在加载第 \((session.pendingLoad?.index ?? session.chapterIndex) + 1) 章…")
                     .controlSize(.large)
             } else if let error = session.lastError, session.text.isEmpty {
                 errorState(title: "这一章没加载出来",
@@ -316,6 +316,9 @@ private struct OnlineReaderHost: View {
                            retry: { session.retry() })
             } else {
                 VStack(spacing: 0) {
+                    if let error = session.lastError {
+                        chapterErrorBanner(error)
+                    }
                     if !session.isChapterComplete {
                         Text(OnlineCopy.chapterIncomplete)
                             .font(.caption)
@@ -332,6 +335,15 @@ private struct OnlineReaderHost: View {
                                         pageCache: model?.pageCache,
                                         areaSize: $pageAreaSize,
                                         onTurn: { turnPage($0) })
+                }
+                .overlay(alignment: .topTrailing) {
+                    // 切章加载中正文保持当前章可见，仅在右上角给一个小指示。
+                    if session.isLoading, !session.text.isEmpty {
+                        ProgressView()
+                            .controlSize(.small)
+                            .padding(.top, 12)
+                            .padding(.trailing, 16)
+                    }
                 }
             }
         }
@@ -357,6 +369,28 @@ private struct OnlineReaderHost: View {
             Button("重试", action: retry)
                 .buttonStyle(.borderedProminent)
         }
+    }
+
+    /// 切章失败横幅：进度已保持在当前章，正文继续可读，同时提供重试入口。
+    private func chapterErrorBanner(_ message: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+            Text("这一章没加载出来：\(message)")
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 8)
+            Button("重试") { session.retry() }
+                .controlSize(.small)
+        }
+        .font(.caption)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity)
+        .background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
+        .padding(.horizontal, 32)
+        .padding(.top, 10)
     }
 
     // MARK: 目录

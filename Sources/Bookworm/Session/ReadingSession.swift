@@ -11,6 +11,12 @@ final class ReadingSession: ObservableObject {
         case floating
     }
 
+    /// 切章请求的目标描述；用于失败后的定向重试。
+    struct PendingLoad {
+        let index: Int
+        let landingAtEnd: Bool
+    }
+
     struct Loader {
         /// 加载第 N 章（本地书为第 N 页）的文本内容。
         var load: (Int) async throws -> ChapterPayload
@@ -27,6 +33,8 @@ final class ReadingSession: ObservableObject {
     @Published private(set) var lastError: String?
     /// 本章正文是否完整（BR-34/BR-35 的提示依据）。
     @Published private(set) var isChapterComplete: Bool = true
+    /// 最近一次进行中 / 已失败的加载请求；重试时优先恢复它。
+    @Published private(set) var pendingLoad: PendingLoad?
     @Published private(set) var isActive: Bool = false
     @Published private(set) var lastUpdateSource: Source = .main
 
@@ -92,19 +100,23 @@ final class ReadingSession: ObservableObject {
         self.chapterIndex = 0
         self.chapterCount = 0
         self.chapterTitle = ""
+        pendingLoad = nil
     }
 
     // MARK: - 切章
 
     /// 切章。`landingAtEnd` 为 true 时落在章末（最后一页），用于向后翻页
     /// 跨过章边界时保持阅读连贯，而不是回到上一章开头。
+    ///
+    /// 这里不预先推进 `chapterIndex` / `offset`：只有新章加载成功才提交新状态；
+    /// 加载失败则停留在当前章，避免「章号已前进而正文还是上一章」造成内容重复阅读。
     func goToChapter(_ index: Int, landingAtEnd: Bool = false) {
         guard isActive, chapterCount > 0 else { return }
         let target = min(max(index, 0), chapterCount - 1)
         guard target != chapterIndex || text.isEmpty else { return }
+        // 同一章已在加载时忽略重复请求（翻页连点 / 工具栏连点防护）。
+        if isLoading, pendingLoad?.index == target { return }
         flush()
-        chapterIndex = target
-        offset = 0
         loadChapter(index: target, offset: 0, landingAtEnd: landingAtEnd)
     }
 
@@ -115,21 +127,29 @@ final class ReadingSession: ObservableObject {
 
     func retry() {
         guard isActive else { return }
-        loadChapter(index: chapterIndex, offset: min(offset, max(0, text.count)))
+        if let pendingLoad {
+            // 优先重试失败的那次切章请求，而不是重载当前章。
+            loadChapter(index: pendingLoad.index,
+                        offset: 0,
+                        landingAtEnd: pendingLoad.landingAtEnd)
+        } else {
+            loadChapter(index: chapterIndex, offset: min(offset, max(0, text.count)))
+        }
     }
 
     private func loadChapter(index: Int, offset: Int, landingAtEnd: Bool = false) {
         guard let loader else { return }
         loadToken += 1
         let token = loadToken
+        pendingLoad = PendingLoad(index: index, landingAtEnd: landingAtEnd)
         isLoading = true
-        isChapterComplete = true
         lastError = nil
         Task { @MainActor [weak self] in
             guard let self else { return }
             do {
                 let payload = try await loader.load(index)
                 guard token == self.loadToken else { return }
+                self.pendingLoad = nil
                 self.text = payload.text
                 self.chapterTitle = payload.title
                 self.chapterIndex = payload.index
@@ -144,7 +164,9 @@ final class ReadingSession: ObservableObject {
                 guard token == self.loadToken else { return }
                 self.isLoading = false
                 if case NetworkError.cancelled = error { return }
+                // 失败不改动章号与进度：正文仍是当前章，UI 显示错误并提供重试。
                 self.lastError = error.localizedDescription
+                Diagnostics.log("session", "第 \(index + 1) 章加载失败，停留在第 \(self.chapterIndex + 1) 章：\(error.localizedDescription)")
             }
         }
     }

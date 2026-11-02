@@ -1,0 +1,47 @@
+---
+import { ExternalLinkIcon } from '@lucide/vue'
+import { RELEASES } from '@/lib/changelog'
+import { SITE } from '@/lib/site'
+---
+
+<section id="changelog" class="section border-y border-border bg-card" aria-labelledby="changelog-title">
+  <div class="container-page">
+    <div class="reveal mx-auto max-w-2xl text-center">
+      <p class="section-eyebrow">更新日志</p>
+      <h2 id="changelog-title" class="section-title mt-2">版本更新</h2>
+      <p class="section-desc">
+        应用内更新由 Sparkle 2 读取本仓库的 appcast.xml；下面是最近七个版本。
+      </p>
+    </div>
+
+    <div class="reveal card-surface mx-auto mt-8 max-w-3xl overflow-hidden">
+      <ul class="divide-y divide-border">
+        {
+          RELEASES.map((release) => (
+            <li class="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 px-5 py-3">
+              <span class="flex items-center gap-3">
+                <span class="font-mono text-sm font-semibold">v{release.version}</span>
+                <span class="text-xs text-muted-foreground">{release.date}</span>
+              </span>
+              <a
+                href={release.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                class="inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+              >
+                Release 说明
+                <ExternalLinkIcon class="size-3" />
+              </a>
+            </li>
+          ))
+        }
+      </ul>
+    </div>
+
+    <p class="mt-5 text-center text-xs text-muted-foreground">
+      <a href={SITE.releases} target="_blank" rel="noopener noreferrer" class="text-primary transition-colors hover:text-brand-hover">
+        在 GitHub 查看全部版本
+      </a>
+    </p>
+  </div>
+</section>

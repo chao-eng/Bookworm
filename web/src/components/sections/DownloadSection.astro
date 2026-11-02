@@ -1,0 +1,100 @@
+---
+import { CircleAlertIcon, DownloadIcon } from '@lucide/vue'
+import { Badge } from '@/components/ui/badge'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import CommandBlock from '@/components/site/CommandBlock.vue'
+import GitHubMark from '@/components/site/GitHubMark.vue'
+import LinkButton from '@/components/site/LinkButton.vue'
+import { DOWNLOAD_CHANNELS, INSTALL_COMMAND, SITE } from '@/lib/site'
+
+const installSteps = [
+  `下载 ${SITE.name}-${SITE.version.replace('v', '')}.dmg。`,
+  '双击前在终端清除 DMG 的隔离标记。',
+  `双击 DMG，把 ${SITE.name} 拖入「应用程序」。`,
+  '对应用再清除一次隔离标记后启动。',
+]
+---
+
+<section id="download" class="section" aria-labelledby="download-title">
+  <div class="container-page">
+    <div class="reveal mx-auto max-w-2xl text-center">
+      <p class="section-eyebrow">下载</p>
+      <h2 id="download-title" class="section-title mt-2">下载 {SITE.name}</h2>
+      <p class="section-desc">
+        安装包来自 GitHub Releases，下载后拖入「应用程序」即可。当前版本 {SITE.version}。
+      </p>
+    </div>
+
+    <div class="reveal mx-auto mt-8 max-w-2xl">
+      {
+        DOWNLOAD_CHANNELS.map((channel) => (
+          <Card class:list={['h-full', channel.variant === 'default' && 'ring-2 ring-primary/30']}>
+            <CardHeader>
+              <Badge variant={channel.variant === 'default' ? 'default' : 'outline'} class="h-6 px-2.5">
+                {channel.tag}
+              </Badge>
+              <CardTitle class="mt-4 text-lg">{channel.title}</CardTitle>
+            </CardHeader>
+            <CardContent class="flex flex-1 flex-col">
+              <p class="text-sm leading-relaxed text-muted-foreground">{channel.description}</p>
+              <div class="mt-5 flex flex-col gap-2">
+                {channel.options.map((option) => (
+                  <LinkButton
+                    href={option.href}
+                    external
+                    variant={option.label.startsWith('下载') ? 'default' : 'outline'}
+                    class="w-full"
+                  >
+                    {channel.icon === 'github' ? <GitHubMark size={16} /> : <DownloadIcon />}
+                    {option.label}
+                  </LinkButton>
+                ))}
+              </div>
+              <p class="mt-2 text-center text-xs text-muted-foreground">{channel.note}</p>
+            </CardContent>
+          </Card>
+        ))
+      }
+    </div>
+
+    <div class="reveal card-surface mx-auto mt-6 max-w-2xl p-5 sm:p-6">
+      <h3 class="text-base font-medium">安装与首次运行</h3>
+
+      <div class="mt-4 grid gap-5 lg:grid-cols-2">
+        <div>
+          <ol class="space-y-2.5">
+            {
+              installSteps.map((step, i) => (
+                <li class="flex gap-2.5 text-sm leading-relaxed text-muted-foreground">
+                  <span class="flex size-5 shrink-0 items-center justify-center rounded-full bg-primary/10 font-mono text-[11px] font-semibold text-primary">
+                    {i + 1}
+                  </span>
+                  <span>{step}</span>
+                </li>
+              ))
+            }
+          </ol>
+          <p class="mt-4 flex gap-2.5 text-xs leading-relaxed text-muted-foreground">
+            <CircleAlertIcon class="mt-0.5 size-3.5 shrink-0 text-primary" />
+            <span>
+              项目未购买 Apple 商业签名证书，首次打开可能被 Gatekeeper 拦截并提示「应用程序已损坏」或「无法验证开发者」，这不是文件损坏。
+            </span>
+          </p>
+        </div>
+
+        <div>
+          <p class="text-sm leading-relaxed text-muted-foreground">
+            在终端执行命令移除隔离标记后即可正常启动；不习惯终端也可以走「系统设置 → 隐私与安全性 → 仍要打开」。
+          </p>
+          <div class="mt-3">
+            <CommandBlock client:visible code={INSTALL_COMMAND} label="移除 Gatekeeper 隔离标记" />
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <p class="mt-6 text-center text-xs text-muted-foreground">
+      系统要求：{SITE.osRequirement} · 适用芯片：{SITE.archRequirement}
+    </p>
+  </div>
+</section>

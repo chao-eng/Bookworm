@@ -1,0 +1,67 @@
+---
+import { CircleCheckIcon } from '@lucide/vue'
+import { Kbd } from '@/components/ui/kbd'
+import CommandBlock from '@/components/site/CommandBlock.vue'
+import { SHORTCUTS } from '@/lib/site'
+import { TUTORIAL_STEPS } from '@/lib/tutorial'
+---
+
+<section id="tutorial" class="section" aria-labelledby="tutorial-title">
+  <div class="container-page">
+    <div class="reveal mx-auto max-w-2xl text-center">
+      <p class="section-eyebrow">上手教程</p>
+      <h2 id="tutorial-title" class="section-title mt-2">从下载到读到第一本书</h2>
+      <p class="section-desc">
+        七步走完。前两步只用系统能力，第三步之后才需要书源。
+      </p>
+    </div>
+
+    <ol class="reveal mt-8 grid gap-3 sm:grid-cols-2">
+      {
+        TUTORIAL_STEPS.map((step, i) => (
+          <li class="card-surface flex flex-col p-5">
+            <div class="flex items-start gap-3">
+              <span class="flex size-7 shrink-0 items-center justify-center rounded-full bg-primary/10 font-mono text-xs font-semibold text-primary">
+                {i + 1}
+              </span>
+              <h3 class="pt-0.5 text-base font-medium">{step.title}</h3>
+            </div>
+
+            <ul class="mt-3 space-y-2">
+              {step.bullets.map((bullet) => (
+                <li class="flex gap-2 text-sm leading-relaxed text-muted-foreground">
+                  <CircleCheckIcon class="mt-0.5 size-3.5 shrink-0 text-primary" />
+                  <span>{bullet}</span>
+                </li>
+              ))}
+            </ul>
+
+            {step.command && (
+              <div class="mt-4">
+                <CommandBlock client:visible code={step.command} label="清除 Gatekeeper 隔离标记" />
+              </div>
+            )}
+
+            {step.showHotkeys && (
+              <div class="mt-4 border-t border-border pt-4">
+                <p class="text-xs font-medium text-muted-foreground">全局快捷键</p>
+                <ul class="mt-2 grid gap-2 sm:grid-cols-2">
+                  {SHORTCUTS.map((shortcut) => (
+                    <li class="flex items-center gap-2">
+                      <span class="flex shrink-0 items-center gap-1">
+                        {shortcut.keys.map((key) => (
+                          <Kbd>{key}</Kbd>
+                        ))}
+                      </span>
+                      <span class="text-xs text-muted-foreground">{shortcut.name}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </li>
+        ))
+      }
+    </ol>
+  </div>
+</section>

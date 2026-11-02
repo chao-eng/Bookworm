@@ -6,6 +6,19 @@
     <description>原生 macOS 电子书与漫画阅读器。</description>
     <language>zh-CN</language>
     <item>
+      <title>Bookworm 0.1.7</title>
+      <sparkle:version>9</sparkle:version>
+      <sparkle:shortVersionString>0.1.7</sparkle:shortVersionString>
+      <pubDate>Mon, 02 Nov 2026 09:34:33 +0000</pubDate>
+      <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+      <sparkle:releaseNotesLink>https://github.com/chao-eng/Bookworm/releases/tag/v0.1.7</sparkle:releaseNotesLink>
+      <enclosure
+        url="https://github.com/chao-eng/Bookworm/releases/download/v0.1.7/Bookworm-0.1.7.dmg"
+        sparkle:edSignature="AIFT4mhWCZMt7XzbU2puvVkUa7R8Uaygw1tBKo5k3fG94usc4Z4GoBvEk7mktriG5FNI7JOR/X/NNMRDhTY0CA=="
+        length="4722008"
+        type="application/octet-stream" />
+    </item>
+    <item>
       <title>Bookworm 0.1.6</title>
       <sparkle:version>8</sparkle:version>
       <sparkle:shortVersionString>0.1.6</sparkle:shortVersionString>

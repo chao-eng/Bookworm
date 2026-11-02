@@ -137,6 +137,9 @@ final class FloatingPanelController: NSObject, ObservableObject {
         if isPanelVisible || iconHidden {
             hide()
         } else {
+            // 没有打开的书时不唤起空面板：否则按下隐藏键反而弹出一块
+            // 显示「未打开书籍」的悬浮窗，看起来像隐藏失败。
+            guard ReadingSession.shared.isActive else { return }
             show()
         }
     }

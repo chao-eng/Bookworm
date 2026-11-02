@@ -22,11 +22,21 @@ final class ReadingSession: ObservableObject {
         var load: (Int) async throws -> ChapterPayload
     }
 
+    /// 章节列表条目。`index` 与 `chapterIndex` 同一套编号，主窗与悬浮窗共享。
+    struct ChapterSummary: Identifiable, Equatable {
+        let index: Int
+        let title: String
+        var level: Int = 0
+        var id: Int { index }
+    }
+
     @Published private(set) var bookID: String = ""
     @Published private(set) var bookTitle: String = ""
     @Published private(set) var chapterIndex: Int = 0
     @Published private(set) var chapterCount: Int = 0
     @Published private(set) var chapterTitle: String = ""
+    /// 整本书的章节列表；主阅读窗口关闭后仍保留，供悬浮窗章节面板使用。
+    @Published private(set) var chapters: [ChapterSummary] = []
     @Published private(set) var offset: Int = 0
     @Published private(set) var text: String = ""
     @Published private(set) var isLoading: Bool = false
@@ -65,7 +75,8 @@ final class ReadingSession: ObservableObject {
               chapterTitle: String = "",
               offset: Int = 0,
               loader: Loader,
-              persist: ((Int, Int, Double) -> Void)?) {
+              persist: ((Int, Int, Double) -> Void)?,
+              chapters: [ChapterSummary]? = nil) {
         let sameBook = isActive && self.bookID == bookID
         if isActive && !sameBook {
             flush()
@@ -75,6 +86,11 @@ final class ReadingSession: ObservableObject {
         self.chapterCount = max(chapterCount, 1)
         self.loader = loader
         self.persist = persist
+        // 同一本书重建目录后也要刷新列表，因此放在 sameBook 提前返回之前。
+        // 不传目录时保留已有列表，避免遗漏参数把章节面板清空。
+        if let chapters {
+            self.chapters = chapters
+        }
         isActive = true
         if sameBook {
             return
@@ -100,7 +116,18 @@ final class ReadingSession: ObservableObject {
         self.chapterIndex = 0
         self.chapterCount = 0
         self.chapterTitle = ""
+        self.chapters = []
         pendingLoad = nil
+    }
+
+    /// 本地文字书的章节列表：会话索引就是页/章序号，标题取 `pageTitle(at:)`。
+    static func makeLocalChapters(reader: ContentReader, count: Int) -> [ChapterSummary] {
+        (0..<max(count, 0)).map { index in
+            let raw = reader.pageTitle(at: index) ?? ""
+            let title = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            return ChapterSummary(index: index,
+                                  title: title.isEmpty ? "第 \(index + 1) 节" : title)
+        }
     }
 
     // MARK: - 切章

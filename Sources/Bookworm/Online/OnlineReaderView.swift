@@ -127,6 +127,10 @@ final class OnlineReaderModel: ObservableObject {
                                          chapterIndex: chapter,
                                          offset: offset,
                                          percent: percent)
+        }, chapters: chapters.map {
+            ReadingSession.ChapterSummary(index: $0.index,
+                                          title: $0.title,
+                                          level: $0.level ?? 0)
         })
         prefetch(around: start)
     }

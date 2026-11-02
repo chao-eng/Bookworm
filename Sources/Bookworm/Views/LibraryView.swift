@@ -580,7 +580,8 @@ struct LibraryView: View {
                     }),
                     persist: { page, _, _ in
                         library.updateProgress(itemID: item.id, page: page, pageCount: count)
-                    }
+                    },
+                    chapters: ReadingSession.makeLocalChapters(reader: reader, count: count)
                 )
                 // 不指定模式：沿用上次的显示模式（含迷你模式）。
                 FloatingPanelController.shared.show()

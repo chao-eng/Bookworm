@@ -709,7 +709,8 @@ final class ReaderModel: ObservableObject {
                                       text: TextExtraction.plainText(from: content),
                                       complete: true)
             }),
-            persist: nil
+            persist: nil,
+            chapters: ReadingSession.makeLocalChapters(reader: contentReader, count: count)
         )
     }
 

@@ -87,6 +87,13 @@ final class FloatingPanelController: NSObject, ObservableObject {
     /// 整体隐藏（只剩透明区域）时用全局鼠标移动监听判断移回。
     private var quickHideMouseMonitor: Any?
 
+    /// 章节面板是否打开。打开期间抑制鼠标移出快速隐藏，否则鼠标移向面板时读窗先消失。
+    private var chapterPaletteOpen = false
+    /// 打开章节面板时的书 ID，会话切书后据此收起过期面板。
+    private var chapterPaletteBookID = ""
+    /// 打开章节面板时的章号，外部切章后据此收起过期面板。
+    private var chapterPaletteChapterIndex = 0
+
     private override init() {
         state = FloatingStateStore.load()
     }
@@ -184,6 +191,9 @@ final class FloatingPanelController: NSObject, ObservableObject {
         syncVisibleNormalFrame()
         state.mode = .hidden
         state.isVisible = false
+        // 放在 mode 置为 hidden 之后：面板关闭回调里的快速隐藏判断会被跳过，
+        // 不会在读窗收起途中再触发一次收缩。读窗收起时面板也不能留在屏幕上。
+        ChapterPaletteController.shared.hide()
         panel?.orderOut(nil)
         autoPageTimer?.invalidate()
         autoPageTimer = nil
@@ -205,6 +215,34 @@ final class FloatingPanelController: NSObject, ObservableObject {
     func close() {
         hide()
         releasePagesNow()
+    }
+
+    /// 右键「章节列表」：在悬浮窗旁弹出可搜索的临时面板。
+    /// 悬浮窗本身不能成为 key window，因此输入交给独立面板接收。
+    func showChapterPalette() {
+        let session = ReadingSession.shared
+        guard session.isActive else { return }
+        // 鼠标移向面板的途中不能触发快速隐藏。
+        cancelQuickHide(restoringFrame: true)
+        let anchor = panel?.isVisible == true ? panel!.frame : normalFrame
+        // 先收掉旧面板，避免它的关闭回调把下面刚设置的状态改回去。
+        ChapterPaletteController.shared.hide()
+        chapterPaletteBookID = session.bookID
+        chapterPaletteChapterIndex = session.chapterIndex
+        chapterPaletteOpen = true
+        ChapterPaletteController.shared.show(anchor: anchor) { [weak self] in
+            guard let self else { return }
+            self.chapterPaletteOpen = false
+            // 面板关闭时鼠标多半还在面板一侧，补判一次快速隐藏，
+            // 否则要等鼠标重新移入读窗再移出才会生效。
+            self.beginQuickHide()
+        }
+    }
+
+    /// 章节面板选定后跳章，并重置自动翻页计时，避免刚跳完就被翻走。
+    func jumpToChapter(_ index: Int) {
+        ReadingSession.shared.goToChapter(index)
+        resetAutoPageTimer()
     }
 
     func persistNow() {
@@ -367,6 +405,8 @@ final class FloatingPanelController: NSObject, ObservableObject {
     }
 
     private func beginQuickHide() {
+        // 章节面板开着时鼠标必然离开读窗，此时不能把读窗收起来。
+        guard !chapterPaletteOpen else { return }
         guard !quickHidden, let panel, panel.isVisible, state.mode != .hidden else { return }
         let mode = state.quickHide
         guard mode != .off else { return }
@@ -446,6 +486,11 @@ final class FloatingPanelController: NSObject, ObservableObject {
     /// 左键：快速隐藏态下用于「双击恢复」，否则按设置翻页。
     /// 返回 true 表示事件已被消费，不再交给 SwiftUI（避免误触按钮/菜单）。
     private func handlePanelMouseDown(_ event: NSEvent) -> Bool {
+        // 悬浮窗不能成为 key window，点击它不会让章节面板失焦，
+        // 因此这里显式收起面板，再执行原有的翻页/恢复逻辑。
+        if chapterPaletteOpen {
+            ChapterPaletteController.shared.hide()
+        }
         if quickHidden {
             guard state.quickHide == .hideDoubleClick
                     || state.quickHide == .shrinkIconDoubleClick else { return false }
@@ -716,6 +761,13 @@ final class FloatingPanelController: NSObject, ObservableObject {
 
     private func sessionChanged() {
         let session = ReadingSession.shared
+        // 会话失效、换书或被外部切章时，面板里的章号与快照已经过期，直接收起。
+        if chapterPaletteOpen,
+           !session.isActive
+            || session.bookID != chapterPaletteBookID
+            || session.chapterIndex != chapterPaletteChapterIndex {
+            ChapterPaletteController.shared.hide()
+        }
         if session.isLoading {
             beginLoadingWatchdog()
         } else {
@@ -935,6 +987,8 @@ final class FloatingPanelController: NSObject, ObservableObject {
 
     private func autoPageTick() {
         guard state.mode != .hidden, isPanelVisible else { return }
+        // 章节面板开着时暂停自动翻页，避免面板快照里的当前章被后台翻走。
+        guard !chapterPaletteOpen else { return }
         nextPage()
     }
 
@@ -1455,6 +1509,9 @@ struct FloatingPanelView: View {
 
     @ViewBuilder
     private var menu: some View {
+        Button("章节列表") { model.showChapterPalette() }
+            .disabled(!session.isActive)
+        Divider()
         Button("放大字号") { model.increaseFont() }
         Button("缩小字号") { model.decreaseFont() }
         Divider()

@@ -43,8 +43,8 @@ export const FAQ_ITEMS: FaqItem[] = [
   },
   {
     id: 'intel',
-    question: '当前安装包支持 Intel Mac 吗，能否自己构建？',
+    question: '安装包支持 Intel Mac 吗，能否自己构建？',
     answer:
-      '当前发布包为 Apple Silicon（arm64）。Intel Mac 可从源码构建：clone 后执行 ./scripts/build-app.sh，需要 macOS 15+ 与 Swift 6.0 工具链。',
+      '支持。发布包为 Universal 通用二进制，同时包含 Apple Silicon（arm64）与 Intel（x86_64）两个架构，macOS 15+ 的 Intel Mac 可直接运行。也可以从源码构建：clone 后执行 ./scripts/build-app.sh，需要 macOS 15+ 与 Swift 6.0 工具链。',
   },
 ]

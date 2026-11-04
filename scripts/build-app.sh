@@ -5,15 +5,23 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 CONFIG="${CONFIG:-release}"
+# 默认产出 Universal 二进制，Apple Silicon 与 Intel Mac 都能直接运行。
+# 可传入单个架构（如 ARCHS=arm64）以加快本地调试构建。
+ARCHS="${ARCHS:-arm64 x86_64}"
 APP_NAME="Bookworm"
 BUNDLE_DIR="build/${APP_NAME}.app"
 EXE_NAME="${APP_NAME}"   # 包内可执行文件名，须与 Info.plist 的 CFBundleExecutable 一致
 INFO_PLIST="Resources/Info.plist"
 
-echo "Building (${CONFIG})…"
-swift build -c "${CONFIG}" --disable-sandbox
+ARCH_FLAGS=()
+for arch in ${ARCHS}; do
+  ARCH_FLAGS+=(--arch "${arch}")
+done
 
-BIN_PATH="$(swift build -c "${CONFIG}" --disable-sandbox --show-bin-path)"
+echo "Building (${CONFIG}, ${ARCHS})…"
+swift build -c "${CONFIG}" --disable-sandbox "${ARCH_FLAGS[@]}"
+
+BIN_PATH="$(swift build -c "${CONFIG}" --disable-sandbox "${ARCH_FLAGS[@]}" --show-bin-path)"
 EXE_PATH="${BIN_PATH}/${EXE_NAME}"
 
 if [[ ! -f "${EXE_PATH}" ]]; then
@@ -67,4 +75,5 @@ done
 codesign --force --deep --sign - "${BUNDLE_DIR}" 2>/dev/null || true
 
 echo "Done: ${BUNDLE_DIR}"
+echo "Architectures: $(lipo -archs "${BUNDLE_DIR}/Contents/MacOS/${EXE_NAME}")"
 echo "Run with: open ${BUNDLE_DIR}"

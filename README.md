@@ -170,6 +170,8 @@
 
 ## 安装（预编译 DMG）
 
+> 发布包为 Universal 通用二进制，同时包含 Apple Silicon（arm64）与 Intel（x86_64）两个架构，macOS 15+ 的 Intel Mac 可直接运行。
+
 > DMG 采用临时签名（ad-hoc），**未经过 Apple 公证**（公证需要付费的 Developer ID）。在 macOS Sequoia 上，弹窗 *「Apple 无法验证 'Bookworm-x.y.z.dmg' 是否包含恶意软件」* 会在你看到 DMG 内容之前就阻止挂载，而且弹窗已不再提供「仍要打开」按钮。你需要先清除隔离标记，或者走「系统设置」流程。
 
 ### 最快捷的方式，一条终端命令加拖拽安装

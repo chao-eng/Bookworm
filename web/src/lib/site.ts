@@ -58,7 +58,7 @@ export const SITE = {
     '本地电子书、漫画与在线书源统一管理，阅读窗口与全局悬浮窗共享同一份进度。',
   specs: ['纯 Swift / SwiftUI 原生', 'macOS 15 或更高', 'MIT 开源'],
   osRequirement: 'macOS 15.0 (Sequoia) 或更高版本',
-  archRequirement: 'Apple Silicon（当前发布包为 arm64）；Intel Mac 可从源码构建',
+  archRequirement: 'Apple Silicon 与 Intel 通用（Universal 二进制）',
   repo: 'https://github.com/chao-eng/Bookworm',
   releases: 'https://github.com/chao-eng/Bookworm/releases',
   issues: 'https://github.com/chao-eng/Bookworm/issues',

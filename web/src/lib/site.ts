@@ -52,7 +52,7 @@ export const SITE = {
     'Bookworm 是一个用 SwiftUI 原生开发的 macOS 阅读器：本地电子书、漫画与在线书源统一进一个书架，支持全局悬浮窗阅读、阅读进度同步与网页翻译。MIT 开源，除自动更新外不依赖第三方组件。',
   keywords:
     'Bookworm,macOS 阅读器,电子书阅读器,漫画阅读器,在线书源,legado 书源,EPUB,Mobi,AZW3,CBZ,CBR,悬浮窗阅读,SwiftUI',
-  version: 'v0.1.8',
+  version: 'v0.1.9',
   license: 'MIT License',
   subheadline:
     '本地电子书、漫画与在线书源统一管理，阅读窗口与全局悬浮窗共享同一份进度。',
@@ -64,7 +64,7 @@ export const SITE = {
   issues: 'https://github.com/chao-eng/Bookworm/issues',
   licenseUrl: 'https://github.com/chao-eng/Bookworm/blob/main/LICENSE',
   downloadUrl:
-    'https://github.com/chao-eng/Bookworm/releases/download/v0.1.8/Bookworm-0.1.8.dmg',
+    'https://github.com/chao-eng/Bookworm/releases/download/v0.1.9/Bookworm-0.1.9.dmg',
 } as const
 
 export const NAV_ITEMS: NavItem[] = [

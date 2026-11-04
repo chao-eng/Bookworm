@@ -11,7 +11,7 @@ export const TUTORIAL_STEPS: TutorialStep[] = [
     id: 'install',
     title: '安装并首次打开',
     bullets: [
-      '从 GitHub Releases 下载 Bookworm-0.1.8.dmg。',
+      '从 GitHub Releases 下载 Bookworm-0.1.9.dmg。',
       '拖入「应用程序」；未公证的包可能被 Gatekeeper 拦截。',
       '执行命令清除隔离标记后正常启动。',
     ],
